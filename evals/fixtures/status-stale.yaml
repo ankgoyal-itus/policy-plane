@@ -1,0 +1,5 @@
+- rule: r-schedule
+  surface: only
+  state: verified
+  date: 2026-06-01          # 92 days before 2026-09-01; interval is 30
+  by: tester

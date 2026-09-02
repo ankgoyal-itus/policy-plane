@@ -1,0 +1,386 @@
+# policy-plane — define once, see where it's actually in force.
+#
+# The single source of truth. Write rules in your own words; the checklist and the page
+# are generated from this. Placeholder names — swap in your own, or put the real thing in
+# policy.local.yaml (gitignored).
+#
+# Menu paths verified 2026-09-01. Vendors reshuffle these; when one is wrong, fix it here
+# once and every rule that routes through it is corrected everywhere.
+version: 1
+family: "The Example Family"
+
+kids:
+  - id: alex
+    name: "Alex, 12"
+    accounts:
+      # Per-app identity. `id` is the numeric user id some vendors route by -- Roblox's
+      # screen-time page is addressed as .../LinkedChildDetails-<id>/ScreentimeManagement.
+      #
+      # THESE ARE FAKE. 999999999999 is deliberately not a plausible id, so a run against
+      # it fails obviously rather than loading someone else's page. Put real values in
+      # policy.local.yaml -- gitignored, and build.py prefers it automatically. Do not
+      # edit this file with real ones: it is tracked.
+      roblox:
+        username: alex_example
+        id: 999999999999
+  - id: sam
+    name: "Sam, 9"
+
+# Five rule kinds:  schedule · contact · content · time · purchase
+# A surface may only claim a kind in `can` if it also says `how` to do it.
+rules:
+  # Every rule is a KIND plus typed PARAMS. The English sentence on the dashboard is
+  # GENERATED from these fields, never authored, so it cannot drift from what the
+  # vendors are actually checked against.
+  #
+  # `app` scopes the rule. Omit it and the rule covers every screen; name an app and it
+  # only routes to surfaces that govern that app (or to device/network-level ones).
+
+  - id: alex-roblox-time          # <- the slice we are automating first
+    kid: alex
+    kind: time
+    app: roblox
+    params:
+      minutes_per_day: 90
+
+  - id: alex-bedtime
+    kid: alex
+    kind: schedule
+    params:
+      not_after: "21:30"
+      days: [mon, tue, wed, thu, fri]
+
+  - id: alex-homework
+    kid: alex
+    kind: schedule
+    params:
+      not_between: ["15:00", "18:00"]
+      days: [mon, tue, wed, thu, fri]
+
+  - id: alex-strangers
+    kid: alex
+    kind: contact
+    params:
+      who: known_only
+
+  - id: alex-content
+    kid: alex
+    kind: content
+    params:
+      max_maturity: preteen
+
+  - id: alex-spending
+    kid: alex
+    kind: purchase
+    params:
+      require_approval: true
+
+  - id: sam-bedtime
+    kid: sam
+    kind: schedule
+    params:
+      not_after: "20:00"
+
+  - id: sam-content
+    kid: sam
+    kind: content
+    params:
+      max_maturity: kids
+
+  - id: sam-strangers
+    kid: sam
+    kind: contact
+    params:
+      who: family_only
+
+surfaces:
+
+  - id: screentime-ipad
+    app: "*"
+    name: "Screen Time — Alex's iPad"
+    covers: [alex]
+    can: [schedule, contact, content, purchase, time]
+    reach: "This iPad, on any network"
+    blind: "Any other device Alex uses"
+    link: "prefs:root=SCREEN_TIME"
+    link_kind: unofficial      # private URL scheme; Apple breaks these between releases
+    recheck_days: 30
+    redact: "These screens sit under a usage chart — crop it out before saving a shot"
+    how:
+      time:
+        accepts: [minutes_per_day]
+        options: "Per-app or per-category daily limit, and a different limit per day"
+        steps:
+          - "Settings → Screen Time → Family → Alex → App Limits"
+          - "Add Limit → pick the app or category → set the daily time"
+        check: "The app's limit shows the right number of minutes"
+      schedule:
+        accepts: [not_after, not_before, not_between, days]
+        options: "Downtime window per day; App Limits per category or per app"
+        steps:
+          - "Settings → Screen Time → Family → Alex"
+          - "Downtime → turn on and set the window"
+          - "App Limits → add a limit for Social and Entertainment"
+        check: "Downtime is ON and the window matches the rule"
+      contact:
+        accepts: [who]
+        options: "Contacts Only or Everyone, set separately for screen time and downtime"
+        steps:
+          - "Settings → Screen Time → Family → Alex → Communication Limits"
+          - "Set both 'During Screen Time' and 'During Downtime' to Contacts Only"
+        check: "Both Communication Limits read Contacts Only"
+      content:
+        accepts: [max_maturity]
+        options: "Age bands per media type; web content can be an allow-list"
+        steps:
+          - "Settings → Screen Time → Family → Alex → Content & Privacy Restrictions"
+          - "Turn it on, then Content Restrictions"
+          - "Set Music, Movies, TV Shows, Apps and Web Content to age-appropriate values"
+        check: "Content Restrictions shows real age ratings, not 'Allow All'"
+      purchase:
+        accepts: [require_approval]
+        options: "Ask To Buy on/off; in-app purchases allow or deny"
+        steps:
+          - "Content & Privacy Restrictions → iTunes & App Store Purchases"
+          - "Set In-app Purchases to Don't Allow"
+          - "Settings → Family → Alex → Ask To Buy → turn on"
+        check: "In-app Purchases reads Don't Allow and Ask To Buy is on"
+
+  - id: family-link-sam
+    app: "*"
+    name: "Family Link — Sam's phone"
+    covers: [sam]
+    can: [schedule, content, purchase, time]
+    reach: "Sam's Android phone, on any network"
+    blind: "Any other device Sam uses; iOS support is thin"
+    link: "https://families.google.com/"
+    link_kind: official
+    recheck_days: 30
+    redact: "The controls sit inside an activity dashboard — crop it out"
+    # Google renames these sections regularly and the labels differ between the Android
+    # app, the iOS app and the web. The flow is stable even when the wording is not.
+    how:
+      time:
+        accepts: [minutes_per_day]
+        options: "A daily total, plus per-app limits"
+        steps:
+          - "Family Link → Sam → Controls → Screen time → Daily limit"
+          - "Set the daily limit, or set a per-app limit under App limits"
+        check: "The daily limit shows the right number of minutes"
+      schedule:
+        accepts: [not_after, not_before, days]
+        options: "Bedtime, a daily limit, and per-app limits"
+        steps:
+          - "Family Link → Sam → Controls → Screen time"
+          - "Set Bedtime, and a Daily limit if you want one"
+        check: "Bedtime shows the right time and is switched on"
+      content:
+        accepts: [max_maturity]
+        options: "Play Store maturity band per content type"
+        steps:
+          - "Family Link → Sam → Controls → Content restrictions → Google Play"
+          - "Set maturity ratings for apps, games, films and TV"
+        check: "Google Play maturity is set to Sam's age band, not 'Allow all'"
+      purchase:
+        accepts: [require_approval]
+        options: "Approve all content, paid only, in-app only, or nothing"
+        steps:
+          - "Family Link → Sam → Controls → Google Play"
+          - "Purchases and download approvals → Require approval for → All content"
+        check: "'Require approval for' reads All content"
+
+  - id: nextdns-home
+    app: "*"
+    name: "NextDNS — home wifi"
+    covers: [alex, sam]
+    can: [content]
+    reach: "Every device on the home network"
+    blind: "Cellular, VPN, and anywhere away from home"
+    link: "https://my.nextdns.io"
+    link_kind: official
+    recheck_days: 30
+    # Deliberately NOT claiming `schedule`. NextDNS's Recreation Time is one window per
+    # 24h and is absent from its API, so it cannot carry a weekday homework rule. This is
+    # the only surface here with a real API, and it still can't do schedules.
+    how:
+      content:
+        accepts: [max_maturity]
+        options: "Per-service toggles, category blocks, SafeSearch, YouTube Restricted Mode"
+        steps:
+          - "my.nextdns.io → your profile → Parental Control"
+          - "Block the services and categories you want, and turn on SafeSearch"
+          - "Turn on Block Bypass Methods so VPN and DoH can't route around it"
+        check: "The blocked services list is right and Block Bypass Methods is ON"
+
+  - id: roblox-alex
+    app: "roblox"
+    name: "Roblox — Alex's account"
+    covers: [alex]
+    can: [schedule, contact, content, purchase, time]
+    reach: "Roblox, on whatever device Alex plays on"
+    blind: "A second Roblox account"
+    link: "https://www.roblox.com/my/account"
+    link_kind: official
+    recheck_days: 60
+    how:
+      time:
+        accepts: [minutes_per_day]
+        options: "No limit, then 15-minute steps from 15 minutes to 10+ hours. One value, applied every day."
+        steps:
+          - "Settings → Parental Controls → Screen Time"
+          - "Set the Daily limit dropdown, then Save"
+        check: "Daily limit shows the right number of minutes"
+      schedule:
+        accepts: [not_after, not_before]
+        options: "Daily limit or allowed hours"
+        steps:
+          - "Settings → Parental Controls → Screen Time"
+          - "Set the daily limit or the allowed hours"
+        check: "Screen Time shows the right limit and the PIN is set"
+      contact:
+        accepts: [who]
+        options: "Friends only or no chat; DMs controlled separately"
+        steps:
+          - "Settings → Parental Controls → Chat restrictions"
+          - "Set chat to Friends only, and turn off messages from non-friends"
+        check: "Chat reads Friends only"
+      content:
+        maps:                     # Roblox has no "mature" tier at all
+          kids: "Minimal"
+          preteen: "Mild"
+          teen: "Moderate"
+        accepts: [max_maturity]
+        options: "Minimal, Mild, Moderate or Restricted; individual games blockable"
+        steps:
+          - "Settings → Parental Controls → Content Maturity"
+          - "Set to Minimal, Mild or Moderate — not Restricted"
+          - "Settings → Security → set a Parental Controls PIN"
+        check: "Content Maturity is Moderate or below and a PIN is set Alex doesn't know"
+      purchase:
+        accepts: [monthly_limit]
+        options: "Monthly Robux spend limit, down to zero"
+        steps:
+          - "Settings → Parental Controls → Monthly spend limit"
+          - "Set the limit, or set it to zero"
+        check: "A monthly Robux spend limit is set"
+
+  - id: youtube-alex
+    app: "youtube"
+    name: "YouTube — Alex's supervised account"
+    covers: [alex]
+    can: [content]
+    reach: "YouTube while signed in as Alex"
+    blind: "Signed out, or signed in as anyone else"
+    link: "https://families.google.com/"
+    link_kind: official
+    recheck_days: 60
+    how:
+      content:
+        maps:                     # no "kids" level here -- that is YouTube Kids, a
+          preteen: "Explore"      # separate app, so asking for kids is unexpressible
+          teen: "Explore More"
+          mature: "Most of YouTube"
+        accepts: [max_maturity]
+        options: "Explore, Explore More, Most of YouTube, or YouTube Kids only"
+        steps:
+          - "Family Link → Alex → Controls → YouTube settings"
+          - "Set the content setting to the right age band"
+          - "Turn autoplay off"
+        check: "Content setting matches Alex's age and autoplay is off"
+
+  - id: xbox-living-room
+    app: "*"
+    name: "Xbox — living room console"
+    covers: [alex, sam]
+    can: [schedule, contact, content, purchase, time]
+    reach: "This console, for whoever signs in"
+    blind: "Any other device; a second Xbox account"
+    link: "https://account.xbox.com/Settings"
+    link_kind: official
+    recheck_days: 60
+    how:
+      time:
+        accepts: [minutes_per_day]
+        options: "Daily limit, and it can differ per day of the week"
+        steps:
+          - "Xbox Family Settings app → the child → Screen time"
+          - "Set the daily limit"
+        check: "Screen time shows the right daily limit"
+      schedule:
+        accepts: [not_after, not_before, days]
+        options: "Daily limit and allowed hours, per day of the week"
+        steps:
+          - "Xbox Family Settings app → the child → Screen time"
+          - "Set a daily limit, or set allowed hours per day"
+        check: "Screen time is on and the schedule matches the rule"
+      contact:
+        accepts: [who]
+        options: "Friends only or block; friend-request approval; multiplayer toggle"
+        steps:
+          - "Xbox Family Settings app → the child → Communication & multiplayer"
+          - "Set who they can communicate with to Friends only, or Block"
+          - "Turn off 'can add friends without approval'"
+        check: "Communication reads Friends only and friend requests need approval"
+      content:
+        accepts: [max_maturity]
+        options: "Age-rating band blocks older games and apps"
+        steps:
+          - "Xbox Family Settings app → the child → Content filters"
+          - "Set the age rating so older games and apps are blocked"
+        check: "Content filter shows an age, not 'unrestricted'"
+      purchase:
+        accepts: [require_approval]
+        options: "Ask to buy on/off, plus spending history"
+        steps:
+          - "Xbox Family Settings app → the child → Spending"
+          - "Turn on 'Ask to buy' so purchases need your approval"
+        check: "Ask to buy is on"
+
+  # --- Simulated vendors -------------------------------------------------------------
+  # Two local fixture pages. They exist so the whole loop can be demonstrated -- and
+  # tested -- without a real family account at a real vendor, and so that ONE rule can be
+  # seen reaching several vendors that word the same setting differently. They govern
+  # nothing. Both are reached over localhost and are inert if the server is not running.
+  - id: sim-vendor-a
+    app: roblox
+    account: roblox
+    name: "Vendor A"
+    covers: [alex]
+    can: [time]
+    reach: "Nothing. A test double that mimics a vendor with a custom dropdown widget."
+    blind: "Everything — it governs no real device and no real account."
+    link: "http://localhost:8787/extension/test/fixtures/vendor-a.html"
+    link_kind: official
+    recheck_days: 30
+    how:
+      time:
+        accepts: [minutes_per_day]
+        recipe: vendor-a-verify
+        options: "No limit, 30 minutes, 1 hour, 1 hour 30 minutes, 2 hours, 3 hours"
+        steps:
+          - "Open the fixture page"
+          - "Click Manage under Screen time"
+        check: "The Daily limit row shows the minutes the rule asks for"
+
+  - id: sim-vendor-b
+    app: roblox
+    account: roblox
+    name: "Vendor B"
+    covers: [alex]
+    can: [time]
+    reach: "Nothing. A test double built to the opposite shape: a native select, bare
+      minutes, and no drawer to open."
+    blind: "Everything — it governs no real device and no real account."
+    link: "http://localhost:8787/extension/test/fixtures/vendor-b.html"
+    link_kind: official
+    recheck_days: 30
+    how:
+      time:
+        accepts: [minutes_per_day]
+        recipe: vendor-b-verify
+        # No 90 on the list. This is the surface that demonstrates `unexpressible`:
+        # the vendor is reachable, readable and working, and still cannot hold the rule.
+        options: "0, 30, 60 or 120 minutes a day"
+        steps:
+          - "Open the fixture page"
+        check: "Daily allowance shows the minutes the rule asks for"

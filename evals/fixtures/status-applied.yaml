@@ -1,0 +1,5 @@
+- rule: r-schedule
+  surface: only
+  state: applied            # changed, never confirmed
+  date: 2026-09-01
+  by: tester

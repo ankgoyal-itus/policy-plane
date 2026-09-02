@@ -1,0 +1,62 @@
+<!doctype html><meta charset="utf-8">
+<title>Vendor A — parental controls (fixture)</title>
+<!--
+  Shape 1: the awkward one. Mirrors what the brief warns about for Roblox --
+  a CUSTOM dropdown widget rather than a native <select>, a panel that opens as a
+  drawer rather than a page, and a child picker. Deliberately NOT a copy of Roblox's
+  real markup: it exists to exercise the engine, not to stand in for real selectors.
+-->
+<style>
+ body{font:15px system-ui;margin:40px;max-width:720px}
+ .hidden{display:none}
+ .drawer{border:1px solid #ccc;padding:16px;margin-top:16px;border-radius:8px}
+ .listbox{border:1px solid #ccc;border-radius:6px;margin-top:6px}
+ .listbox div{padding:6px 10px;cursor:pointer}
+ .listbox div:hover{background:#eee}
+ button{font:inherit;padding:6px 12px}
+</style>
+
+<h1>Vendor A</h1>
+<div data-testid="account-kind" hidden>parent</div>
+
+<section data-testid="parental-section">
+  <h2>Parental Controls</h2>
+
+  <label>Child
+    <select data-testid="child-picker">
+      <option value="alex_example">alex_example</option>
+      <option value="sam_example">sam_example</option>
+    </select>
+  </label>
+
+  <p>Screen time
+    <button data-testid="screentime-manage">Manage</button>
+  </p>
+
+  <div class="drawer hidden" data-testid="screentime-panel">
+    <h3>Screen time</h3>
+    <p>Daily limit</p>
+    <!-- custom widget: the displayed value is a div, options live in a listbox -->
+    <div data-testid="daily-limit-value" role="button">1 hour 30 minutes</div>
+    <div class="listbox" data-testid="daily-limit-options" role="listbox">
+      <div role="option">No limit</div>
+      <div role="option">30 minutes</div>
+      <div role="option">1 hour</div>
+      <div role="option">1 hour 30 minutes</div>
+      <div role="option">2 hours</div>
+      <div role="option">3 hours</div>
+    </div>
+    <button data-testid="screentime-save">Save</button>
+  </div>
+</section>
+
+<script>
+  document.querySelector('[data-testid="screentime-manage"]').addEventListener("click", () => {
+    document.querySelector('[data-testid="screentime-panel"]').classList.remove("hidden");
+  });
+  // The save button exists so a write recipe would have something to hit. This build
+  // has no write actions, so nothing can reach it.
+  document.querySelector('[data-testid="screentime-save"]').addEventListener("click", () => {
+    document.title = "SAVED — the read-only engine should never cause this";
+  });
+</script>

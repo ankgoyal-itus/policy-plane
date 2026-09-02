@@ -1,0 +1,157 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>policy-plane · recipe runner</title>
+<style>
+  :root{color-scheme:light dark}
+  body{font:15px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+       max-width:900px;margin:40px auto;padding:0 24px}
+  h1{font-size:21px;margin:0 0 4px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.09em;color:#888;margin:28px 0 10px}
+  p.sub{color:#888;margin:0 0 20px;font-size:14px}
+  button{font:inherit;padding:7px 15px;border-radius:8px;cursor:pointer;
+         border:1px solid #999;background:transparent;color:inherit}
+  button.go{border-color:#1a7f4b;color:#1a7f4b;font-weight:600}
+  button[disabled]{opacity:.5;cursor:default}
+  .card{border:1px solid rgba(128,128,128,.3);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+  .card h3{margin:0 0 2px;font-size:15px}
+  .card .id{font-size:12px;color:#888;margin-bottom:10px}
+  .fields{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-bottom:10px}
+  label{font-size:12px;color:#888;display:block}
+  input{font:inherit;font-size:13px;padding:5px 8px;border-radius:6px;width:190px;
+        border:1px solid #999;background:transparent;color:inherit}
+  pre{background:rgba(128,128,128,.12);padding:14px;border-radius:8px;white-space:pre-wrap;
+      word-break:break-word;font-size:12.5px;max-height:60vh;overflow:auto}
+  .warn{color:#b4610a}
+  .tag{font-size:11px;padding:1px 7px;border-radius:20px;background:rgba(128,128,128,.2);
+       margin-left:6px;color:#888}
+</style>
+
+<h1>Recipe runner</h1>
+<p class="sub">Drives the extension by hand. Read-only — there is no write action in this
+build, so nothing here can change a setting. Fields are built from each recipe's own
+schema, so they always match what it requires.</p>
+
+<button id="ping">Re-check the extension</button>
+
+<h2>recipes</h2>
+<div id="recipes">connecting…</div>
+
+<h2>result</h2>
+<pre id="out">not run yet</pre>
+
+<script>
+  var EXT_ID = "jkbakiglogodnlakhcadollfnekeogpd";
+  var out = document.getElementById("out");
+
+  function show(v, bad) {
+    out.className = bad ? "warn" : "";
+    out.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  }
+
+  function send(msg) {
+    return new Promise(function (resolve) {
+      if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
+        return resolve({ ok: false, code: "NO_EXTENSION",
+          error: "chrome.runtime unavailable. The extension is not loaded, or this page "
+               + "is not served from http://localhost:8787 (file:// can never reach one)." });
+      }
+      chrome.runtime.sendMessage(EXT_ID, msg, function (r) {
+        if (chrome.runtime.lastError) {
+          return resolve({ ok: false, code: "NO_EXTENSION",
+                           error: chrome.runtime.lastError.message, expectedId: EXT_ID });
+        }
+        resolve(r);
+      });
+    });
+  }
+
+  function remember(key, value) {
+    try { localStorage.setItem("pp:" + key, value); } catch (e) { /* private window */ }
+  }
+  function recall(key) {
+    try { return localStorage.getItem("pp:" + key); } catch (e) { return null; }
+  }
+
+  function render(recipes) {
+    var box = document.getElementById("recipes");
+    box.innerHTML = "";
+    if (!recipes.length) { box.textContent = "the extension reported no recipes"; return; }
+
+    recipes.forEach(function (r) {
+      var card = document.createElement("div");
+      card.className = "card";
+
+      var title = document.createElement("h3");
+      title.textContent = r.label;
+      if (!r.calibrated) {
+        var tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = "uncalibrated";
+        title.appendChild(tag);
+      }
+      card.appendChild(title);
+
+      var id = document.createElement("div");
+      id.className = "id";
+      id.textContent = r.id + "  ·  " + r.mode + "  ·  v" + r.version;
+      card.appendChild(id);
+
+      // One input per declared param. No guessing which fields a recipe wants.
+      var fields = document.createElement("div");
+      fields.className = "fields";
+      var inputs = {};
+      Object.keys(r.params || {}).forEach(function (name) {
+        var spec = r.params[name];
+        var wrap = document.createElement("div");
+        var lab = document.createElement("label");
+        lab.textContent = name + (spec.required ? " *" : "") + "  (" + spec.type + ")";
+        var inp = document.createElement("input");
+        inp.value = recall(r.id + ":" + name) || "";
+        inp.placeholder = spec.type === "integer" ? "number" : "text";
+        inputs[name] = { el: inp, spec: spec };
+        wrap.appendChild(lab); wrap.appendChild(inp);
+        fields.appendChild(wrap);
+      });
+      card.appendChild(fields);
+
+      var go = document.createElement("button");
+      go.className = "go";
+      go.textContent = "Run";
+      go.addEventListener("click", function () {
+        var params = {};
+        var missing = [];
+        Object.keys(inputs).forEach(function (name) {
+          var raw = inputs[name].el.value.trim();
+          if (!raw) { if (inputs[name].spec.required) missing.push(name); return; }
+          remember(r.id + ":" + name, raw);
+          params[name] = inputs[name].spec.type === "integer" ? Number(raw) : raw;
+        });
+        if (missing.length) {
+          show("fill in: " + missing.join(", "), true);
+          return;
+        }
+        go.disabled = true;
+        show("running " + r.id + " … a tab will open. If a login is needed, sign in and "
+             + "it keeps waiting, up to two minutes.");
+        send({ type: "RUN_RECIPE", recipeId: r.id, params: params }).then(function (res) {
+          go.disabled = false;
+          show(res, !res.ok);       // the WHOLE response, errors included
+        });
+      });
+      card.appendChild(go);
+      box.appendChild(card);
+    });
+  }
+
+  function refresh() {
+    show("checking…");
+    return send({ type: "PING" }).then(function (r) {
+      if (!r.ok) { document.getElementById("recipes").textContent = r.error; show(r, true); return; }
+      render(r.recipes || []);
+      show("extension v" + r.version + " · " + (r.recipes || []).length + " recipes");
+    });
+  }
+
+  document.getElementById("ping").addEventListener("click", refresh);
+  refresh();
+</script>

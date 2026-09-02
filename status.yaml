@@ -1,0 +1,46 @@
+# What's actually been done. One record per (rule, surface) pair you've applied.
+#
+# (`date`, not `on` — YAML 1.1 reads a bare `on:` key as the boolean true.)
+#
+#   applied   — you changed the setting
+#   verified  — you went back and confirmed it reads correctly
+#
+# Only `verified` counts as covered, and only until `recheck_days` runs out.
+# `evidence` is a path under shots/ — the folder is gitignored and the page never
+# embeds the image, only notes that one exists.
+- rule: alex-bedtime
+  surface: screentime-ipad
+  state: verified
+  date: 2026-08-14
+  by: parent
+  evidence: shots/screentime-downtime-2026-08-14.png
+
+- rule: alex-content
+  surface: nextdns-home
+  state: verified
+  date: 2026-08-30
+  by: parent
+
+- rule: alex-strangers
+  surface: roblox-alex
+  state: verified
+  date: 2026-06-18          # past its 60-day recheck as of Sept — shows as stale
+  by: parent
+
+- rule: alex-content
+  surface: youtube-alex
+  state: applied          # changed it, never went back to confirm
+  date: 2026-08-28
+  by: parent
+
+- rule: sam-content
+  surface: nextdns-home
+  state: verified
+  date: 2026-08-30
+  by: parent
+
+- rule: sam-bedtime
+  surface: family-link-sam
+  state: verified
+  date: 2026-08-25
+  by: parent

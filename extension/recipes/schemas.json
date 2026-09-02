@@ -1,0 +1,30 @@
+{
+  "vendor-a-verify": {
+    "version": 1,
+    "calibrated": true,
+    "mode": "verify",
+    "required": [
+      "childUsername",
+      "minutesPerDay"
+    ],
+    "optional": [],
+    "reads": [
+      "dailyLimitText",
+      "offeredText",
+      "selectedChild"
+    ]
+  },
+  "vendor-b-verify": {
+    "version": 1,
+    "calibrated": true,
+    "mode": "verify",
+    "required": [
+      "minutesPerDay"
+    ],
+    "optional": [],
+    "reads": [
+      "dailyLimitText",
+      "offeredText"
+    ]
+  }
+}

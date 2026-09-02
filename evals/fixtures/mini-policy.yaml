@@ -1,0 +1,59 @@
+# Small fixture. Two surfaces of DIFFERENT shape so the engine cannot become
+# single-vendor-shaped, one rule nothing can carry, and one vendor that honours only
+# part of a rule.
+version: 1
+family: "Fixture Family"
+kids:
+  - id: kid
+    name: "Kid, 10"
+rules:
+  - id: r-schedule
+    kid: kid
+    kind: schedule
+    params:
+      not_after: "20:00"
+      days: [mon, tue, wed, thu, fri]
+  - id: r-contact
+    kid: kid
+    kind: contact
+    params:
+      who: family_only
+  - id: r-orphan
+    kid: kid
+    kind: purchase          # no surface below declares `purchase`
+    params:
+      require_approval: true
+surfaces:
+  - id: only
+    name: "Only Surface"
+    app: "*"
+    covers: [kid]
+    can: [schedule, contact]
+    reach: "One device"
+    blind: "Everything else"
+    recheck_days: 30
+    how:
+      schedule:
+        accepts: [not_after, days]
+        steps: ["Open the schedule screen", "Set the window"]
+        check: "The schedule window reads correctly"
+        options: "One window a day, per day of the week"
+      contact:
+        accepts: [who]
+        steps: ["Open the contacts screen", "Set it to family only"]
+        check: "Contacts reads family only"
+        options: "Family only, or everyone"
+  - id: second
+    name: "Second Surface"
+    app: "*"
+    covers: [kid]
+    can: [schedule]
+    reach: "Another device"
+    blind: "The first device"
+    recheck_days: 30
+    how:
+      schedule:
+        accepts: [not_after]        # cannot express `days` -> partial
+        steps: ["A completely different route", "To a completely different screen"]
+        check: "Something else entirely reads correctly"
+        options: "One window, applied every day"

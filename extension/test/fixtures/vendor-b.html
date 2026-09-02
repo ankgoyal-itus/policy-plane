@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8">
+<title>Vendor B — family settings (fixture)</title>
+<!--
+  Shape 2: the genericity proof, and deliberately nothing like shape 1.
+  Native <select> instead of a custom widget, a plain table instead of a drawer, no
+  child picker, different vocabulary, value rendered as bare minutes. If the engine
+  needs ANY change to read this, the abstraction is Roblox-shaped and wrong.
+-->
+<style>
+ body{font:15px system-ui;margin:40px;max-width:720px}
+ table{border-collapse:collapse;margin-top:14px}
+ td,th{border:1px solid #ccc;padding:7px 12px;text-align:left}
+</style>
+
+<h1>Vendor B</h1>
+<div id="signed-in-as">parent@example.invalid</div>
+
+<section id="limits">
+  <h2>Usage limits</h2>
+  <table>
+    <tr><th>Setting</th><th>Value</th></tr>
+    <tr><th id="row-daily">Daily allowance</th><td id="daily-allowance">60</td></tr>
+    <tr><th>Bedtime</th><td id="bedtime">21:00</td></tr>
+  </table>
+
+  <label for="allowance-select">Change allowance</label>
+  <!-- Deliberately offers no 90. A vendor that cannot express the rule as written is
+       not a failure and not coverage -- it is its own verdict, and this fixture is the
+       only place that case can be demonstrated on demand. -->
+  <select id="allowance-select">
+    <option value="0">0</option>
+    <option value="30">30</option>
+    <option value="60" selected>60</option>
+    <option value="120">120</option>
+  </select>
+</section>

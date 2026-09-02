@@ -1,0 +1,30 @@
+# Your real policy. Keep the checked-in policy.yaml as the placeholder example and put
+# actual names in these — build.py prefers them automatically.
+policy.local.yaml
+status.local.yaml
+
+# Screenshots stay on your machine. They are proof for you, not content for a repo.
+shots/*
+!shots/.gitkeep
+
+__pycache__/
+*.pyc
+.DS_Store
+evals/fixtures/_tmp-*.yaml
+
+# Extension signing key. It must live OUTSIDE extension/ -- Chrome loads that whole
+# folder and warns if a key file is in it. The public half is pinned in manifest.json so
+# the extension ID is stable for anyone who clones this; this private half is only needed
+# to package a .crx and can be deleted if you never do.
+extension-key.pem
+
+# Local virtualenv (see README). PyYAML is the only dependency.
+.venv/
+
+# Written by the extension via build.py --serve. Runtime state about YOUR settings.
+observations.json
+
+# The rendered dashboard. Built on demand by build.py, and once real vendors are
+# wired up it carries your household's actual settings — which should not enter git
+# even though observations.json itself is ignored.
+docs/index.html

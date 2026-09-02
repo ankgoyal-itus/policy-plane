@@ -1,0 +1,62 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>policy-plane · extension ping</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+         max-width: 640px; margin: 60px auto; padding: 0 24px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: #6b6b66; margin: 0 0 24px; font-size: 14px; }
+  button { font: inherit; padding: 9px 18px; border-radius: 8px; cursor: pointer;
+           border: 1px solid #999; background: transparent; color: inherit; }
+  pre { background: rgba(128,128,128,.12); padding: 14px; border-radius: 8px;
+        white-space: pre-wrap; word-break: break-word; font-size: 13px; margin-top: 18px; }
+  .ok { color: #1a7f4b; } .bad { color: #b4610a; }
+  code { background: rgba(128,128,128,.12); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
+</style>
+
+<h1>Extension ping</h1>
+<p class="sub">Step 0. Proves this page can reach the extension and get a typed reply.
+Nothing here touches Roblox.</p>
+
+<button id="go">Send PING</button>
+<pre id="out">not run yet</pre>
+
+<p class="sub">Extension ID <code>jkbakiglogodnlakhcadollfnekeogpd</code> · expects to be served from
+<code>http://localhost:8787</code></p>
+
+<script>
+  const EXT_ID = "jkbakiglogodnlakhcadollfnekeogpd";
+  const out = document.getElementById("out");
+
+  document.getElementById("go").addEventListener("click", () => {
+    // chrome.runtime is only injected on origins matching externally_connectable.
+    // Feature-detect it so "not installed" and "wrong origin" surface cleanly instead
+    // of throwing an undefined-property error.
+    if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
+      out.className = "bad";
+      out.textContent =
+        "chrome.runtime is not available on this page.\n\n" +
+        "Either the extension is not loaded, or this page is not being served from\n" +
+        "http://localhost:8787 (a file:// page can never reach an extension).";
+      return;
+    }
+
+    out.className = "";
+    out.textContent = "sending…";
+
+    chrome.runtime.sendMessage(EXT_ID, { type: "PING" }, (response) => {
+      if (chrome.runtime.lastError) {
+        out.className = "bad";
+        out.textContent =
+          "No response from the extension.\n\n" +
+          chrome.runtime.lastError.message +
+          "\n\nCheck it is loaded at chrome://extensions and that its ID matches:\n" +
+          EXT_ID;
+        return;
+      }
+      out.className = response && response.ok ? "ok" : "bad";
+      out.textContent = JSON.stringify(response, null, 2);
+    });
+  });
+</script>

@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "policy-plane recipe runner (fixtures)",
+  "version": "0.3.0",
+  "description": "Reads parental-control settings pages and reports what they say. Read-only.",
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:8787/*"
+    ]
+  },
+  "permissions": [
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://localhost:8787/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "engine/pure.js",
+        "engine/dom.js"
+      ],
+      "matches": [
+        "http://localhost:8787/*"
+      ]
+    }
+  ]
+}
