@@ -376,3 +376,142 @@ test("no recipe targets a vendor the shipped policy no longer carries", () => {
     assert.ok(!ids.includes(p), `${p} was parked but a recipe for it still ships: ${ids}`);
   }
 });
+
+// --- a failed run keeps its tab -----------------------------------------------------
+//
+// Closing the tab after a successful read is tidiness. Closing it after a FAILED one
+// would break the product: NEEDS_LOGIN means a human has to sign in on that exact tab,
+// and closing it removes the only place they can. TIMEOUT and SELECTOR_NOT_FOUND mean
+// the page was not what the recipe expected, and the page is the evidence.
+
+test("the tab is closed only on a successful read", () => {
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const calls = bg.split("\n")
+    .map((line, i) => [i + 1, line])
+    .filter(([, line]) => /\bcloseTab\s*\(/.test(line) && !/^async function closeTab/.test(line.trim()));
+
+  assert.ok(calls.length > 0, "nothing closes the tab; this guard is checking nothing");
+  for (const [lineno, line] of calls) {
+    assert.match(line, /result\s*&&\s*result\.ok|result\.ok\s*\?/,
+                 `background.js:${lineno} closes the tab without checking result.ok — `
+                 + `a failed read must keep its tab:\n  ${line.trim()}`);
+  }
+});
+
+test("a probe never closes its tab", () => {
+  // A probe exists to be looked at. Closing it would defeat the entire point.
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  // Search for the verify call FROM the probe branch onwards. anchorPresent contains an
+  // identical executeScript line earlier in the file, so an unanchored indexOf returned
+  // a position before the start and sliced an empty string -- a guard examining nothing.
+  const start = bg.indexOf('if (recipe.mode === "probe")');
+  assert.ok(start > 0, "could not find the probe branch");
+  const end = bg.indexOf("const [{ result }] = await chrome.scripting", start);
+  assert.ok(end > start, "could not find the verify call after the probe branch");
+  const probeBranch = bg.slice(start, end);
+  assert.ok(probeBranch.length > 50, "could not locate the probe branch");
+  assert.ok(!/\bcloseTab\s*\(/.test(probeBranch),
+            "the probe branch closes its tab; a probe is there to be inspected");
+});
+
+// --- the one place the extension writes to a vendor page ----------------------------
+//
+// announceClose puts a banner on a tab that is about to close. That is the only DOM the
+// extension ever creates on a vendor's page, and the point of these guards is that it
+// stays that way: fixed content, no recipe input, success only, and nothing touched
+// except the banner it makes itself.
+
+function announceCloseSource() {
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const start = bg.indexOf("async function announceClose(");
+  assert.ok(start > 0, "announceClose is gone; these guards check nothing");
+  const end = bg.indexOf("async function closeTab(", start);
+  assert.ok(end > start, "could not find the end of announceClose");
+  return bg.slice(start, end);
+}
+
+test("the closing notice takes no input from a recipe or the page", () => {
+  const src = announceCloseSource();
+  for (const leak of ["recipe", "params", "message.", "checked."]) {
+    assert.ok(!src.includes(leak),
+              `announceClose references ${leak} — its content must be a constant, or a `
+              + "recipe could put arbitrary markup on a vendor's page");
+  }
+  // The only argument it forwards into the page is the countdown.
+  assert.match(src, /args:\s*\[seconds\]/,
+               "announceClose forwards something other than the countdown into the page");
+});
+
+test("the closing notice never sets a value on the page", () => {
+  const src = announceCloseSource();
+  for (const write of [".value =", ".checked =", ".click()", "submit(", "dispatchEvent"]) {
+    assert.ok(!src.includes(write),
+              `announceClose contains ${write} — it may create its banner and nothing else`);
+  }
+});
+
+test("the notice is only shown on the path that closes the tab", () => {
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  const calls = bg.split("\n").map((l, i) => [i + 1, l])
+    .filter(([, l]) => /\bannounceClose\s*\(/.test(l)
+                       && !/^async function announceClose/.test(l.trim()));
+  assert.strictEqual(calls.length, 1,
+                     "announceClose should be called exactly once, from closeTab");
+  const [lineno] = calls[0];
+  const inCloseTab = bg.indexOf("async function closeTab(");
+  const lineOffset = bg.split("\n").slice(0, lineno - 1).join("\n").length;
+  assert.ok(lineOffset > inCloseTab,
+            "announceClose is called outside closeTab, so it can fire without a close");
+});
+
+// --- fixture state must be resettable ----------------------------------------------
+//
+// The demo Reset clears browser storage by the "pp-fixture-" prefix. A fixture that
+// stored its setting under any other name would keep it across a reset, and the next
+// take would open on last take's value while every other signal said clean. Silent, and
+// only visible on camera.
+
+test("every fixture stores its state under the pp-fixture- prefix", () => {
+  const dir = path.join(__dirname, "fixtures");
+  let checked = 0;
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".html"))) {
+    const src = fs.readFileSync(path.join(dir, file), "utf8");
+    const keys = [...src.matchAll(/localStorage\.(?:get|set|remove)Item\(\s*([A-Za-z_$][\w$]*|"[^"]*")/g)]
+      .map((m) => m[1]);
+    if (!keys.length) continue;
+    // Keys are held in a KEY constant; resolve it to the literal it is assigned.
+    for (const ref of new Set(keys)) {
+      const literal = ref.startsWith('"')
+        ? ref.slice(1, -1)
+        : (src.match(new RegExp(`var\\s+${ref}\\s*=\\s*"([^"]*)"`)) || [])[1];
+      assert.ok(literal, `${file}: could not resolve the storage key ${ref}`);
+      assert.ok(literal.startsWith("pp-fixture-"),
+                `${file} stores state under "${literal}" — the demo Reset clears only `
+                + `pp-fixture-* keys, so this would survive a reset unnoticed`);
+      checked++;
+    }
+  }
+  assert.ok(checked >= 2, `only ${checked} fixture storage key(s) found; both fixtures `
+                          + "persist state, so this guard is not seeing one of them");
+});
+
+test("every persisting fixture both reads and writes its key", () => {
+  // Counting keys is not enough: dropping the setItem leaves the getItem behind, so the
+  // key still resolves and the prefix guard passes while the fixture silently stops
+  // remembering anything. That mutation survived the first version of these tests.
+  const dir = path.join(__dirname, "fixtures");
+  let persisting = 0;
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".html"))) {
+    const src = fs.readFileSync(path.join(dir, file), "utf8");
+    if (!src.includes("localStorage")) continue;
+    persisting++;
+    assert.match(src, /localStorage\.getItem\(/,
+                 `${file} writes state but never reads it back on load`);
+    assert.match(src, /localStorage\.setItem\(/,
+                 `${file} reads a saved value but never writes one — saving will not `
+                 + "survive the fresh tab the dashboard opens to re-read");
+  }
+  assert.strictEqual(persisting, 2,
+                     `${persisting} fixtures persist state; expected both vendor-a and `
+                     + "vendor-b, so one has stopped");
+});

@@ -74,6 +74,20 @@ That is the whole thesis in one screen: one sentence you wrote once, two vendors
 share no vocabulary and no page structure, read through the same engine with no
 vendor-specific code in it, and two honest answers rather than two green ticks.
 
+Then change something. Open a fixture, pick a different limit, save — the fixtures are
+real little settings pages that remember what you set. The dashboard hears that a vendor
+moved and **re-reads it**, rather than believing the message: the notification carries no
+value at all, only the fact that something changed. Set Vendor A to 2 hours and the
+verdict turns to *not in force*, because 120 is looser than the 90 you declared.
+
+While each check runs, a bar appears at the top of the page being read — *Policy Plane
+read this page. Nothing was changed.* — and the tab closes itself after three seconds. A
+tab that **stays** open means the read failed, which is worth knowing at a glance.
+
+There is a control panel at <http://localhost:8787/demo_dashboard> with a Reset that puts
+the readings and the fixtures back to their starting state, for when you want to run
+through it again.
+
 ```bash
 .venv/bin/python build.py          # writes docs/index.html (gitignored)
 ```

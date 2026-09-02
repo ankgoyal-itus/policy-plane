@@ -330,3 +330,141 @@ class MermaidDiagrams(unittest.TestCase):
                         self.assertNotIn('"', label,
                                          f'{name} line {lineno}: nested quote in an edge '
                                          f'label — mermaid ends the label at the first one')
+
+
+class FixtureOptionsStayReadable(unittest.TestCase):
+    """A fixture's option list must contain labels and nothing else.
+
+    The optionList extractor selects '[role="option"], li, div' inside the listbox and
+    takes each one's textContent. So two things corrupt it, and both are the kind of
+    change someone makes while improving the look of the page:
+
+      * a wrapper <div> becomes a phantom option
+      * decorative text inside an option -- a tick in a <span> -- joins the label, and
+        the engine reads "1 hour 30 minutes✓" as the value the vendor offers
+
+    The second one actually happened while making the fixture nicer to demo. The tick is
+    a CSS ::after now, which textContent cannot see.
+    """
+
+    def _listboxes(self):
+        """-> [(file, [(option_text, had_child_elements)], stray_child_tags)]
+
+        Parsed, not regexed. The first version of this used a non-greedy regex for the
+        listbox body, which stopped at the first `</div>` -- so it only ever examined ONE
+        option, and it passed when the tick span was reinstated. It was a guard that
+        could not see the bug it was written for.
+        """
+        import html.parser
+
+        class Listbox(html.parser.HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.depth = None          # depth of the listbox element, once entered
+                self.level = 0
+                self.options = []          # (text, had_child_elements)
+                self.stray = []            # tags directly inside the listbox that are not options
+                self._opt = None           # (text_parts, had_child)
+
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                self.level += 1
+                if self.depth is None and a.get("role") == "listbox":
+                    self.depth = self.level
+                    return
+                if self.depth is None:
+                    return
+                if self._opt is not None:
+                    self._opt[1].append(tag)          # an element INSIDE an option
+                elif a.get("role") == "option":
+                    self._opt = ([], [])
+                elif self.level == self.depth + 1:
+                    self.stray.append(tag)            # a non-option child of the listbox
+
+            def handle_endtag(self, tag):
+                if self.depth is not None and self.level == self.depth:
+                    self.depth = None                 # left the listbox
+                elif self._opt is not None and self.level == self.depth + 1:
+                    self.options.append(("".join(self._opt[0]).strip(), list(self._opt[1])))
+                    self._opt = None
+                self.level -= 1
+
+            def handle_data(self, data):
+                if self._opt is not None:
+                    self._opt[0].append(data)
+
+        found = []
+        for path in sorted((harness.REPO / "extension" / "test" / "fixtures").glob("*.html")):
+            parser = Listbox()
+            parser.feed(path.read_text(encoding="utf-8"))
+            if parser.options or parser.stray:
+                found.append((path.name, parser.options, parser.stray))
+        return found
+
+    def test_an_option_contains_no_child_elements(self):
+        boxes = self._listboxes()
+        self.assertTrue(boxes, "no listbox fixture found — this guard is checking nothing")
+        seen = 0
+        for name, options, _stray in boxes:
+            for text, children in options:
+                seen += 1
+                with self.subTest(f"{name}: {text[:30]}"):
+                    self.assertEqual(children, [],
+                                     f"{name}: option {text!r} holds {children} — that "
+                                     "element's text joins the label, and the engine "
+                                     "reads it as part of what the vendor offers")
+        self.assertGreaterEqual(seen, 6, "the parser found almost no options; it is "
+                                         "not reading the whole listbox")
+
+    def test_the_listbox_holds_only_options(self):
+        for name, _options, stray in self._listboxes():
+            with self.subTest(name):
+                self.assertEqual(stray, [],
+                                 f"{name}: {stray} sits directly in the listbox and the "
+                                 "extractor will report it as an option")
+
+
+class StaleServiceWorker(unittest.TestCase):
+    """The page must be able to tell you it is talking to an old extension.
+
+    background.js is a service worker. Chrome keeps running the previous one until the
+    extension is reloaded, so editing it and not reloading leaves you testing the old
+    build while every file on disk says otherwise — and it presents as the new code
+    simply not working, which is the most expensive kind of wrong.
+    """
+
+    def setUp(self):
+        self.html = render(build(load(harness.REPO / "policy.yaml",
+                                      harness.REPO / "status.yaml"), harness.TODAY))
+
+    def test_the_page_carries_the_version_from_the_manifest(self):
+        import json as json_mod
+        manifest = json_mod.loads(
+            (harness.REPO / "extension" / "manifest.json").read_text(encoding="utf-8"))
+        baked = re.search(r'var ON_DISK = "([^"]*)"', self.html)
+        self.assertIsNotNone(baked, "the page no longer carries the on-disk version")
+        self.assertEqual(baked.group(1), manifest["version"],
+                         "the page's idea of the extension version has drifted from "
+                         "the manifest, so the staleness check compares nothing useful")
+        self.assertTrue(baked.group(1), "the version is empty; the check is inert")
+
+    def test_the_version_is_read_from_the_manifest_not_hardcoded(self):
+        """Mutation-resistant: change the manifest, the page must follow."""
+        import json as json_mod
+        path = harness.REPO / "extension" / "manifest.json"
+        original = path.read_text(encoding="utf-8")
+        try:
+            doc = json_mod.loads(original)
+            doc["version"] = "99.99.99"
+            path.write_text(json_mod.dumps(doc, indent=2) + "\n", encoding="utf-8")
+            html = render(build(load(harness.REPO / "policy.yaml",
+                                     harness.REPO / "status.yaml"), harness.TODAY))
+            self.assertIn('var ON_DISK = "99.99.99"', html,
+                          "the version is baked in, not read — the check cannot notice "
+                          "a reloadable change")
+        finally:
+            path.write_text(original, encoding="utf-8")
+
+    def test_there_is_somewhere_to_show_the_warning(self):
+        self.assertIn('id="ext-stale"', self.html,
+                      "the banner element is missing, so the warning has nowhere to go")

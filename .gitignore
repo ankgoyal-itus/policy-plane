@@ -22,9 +22,18 @@ extension-key.pem
 .venv/
 
 # Written by the extension via build.py --serve. Runtime state about YOUR settings.
-observations.json
+# The glob matters: only `observations.json` used to be ignored, so a backup named
+# observations.pre-demo.json -- the same real history under another name -- was
+# committable. Demo scratch files are covered by the same line.
+observations*.json
 
 # The rendered dashboard. Built on demand by build.py, and once real vendors are
 # wired up it carries your household's actual settings — which should not enter git
 # even though observations.json itself is ignored.
 docs/index.html
+
+# Both scripts/ checkers document `npm install --no-save jsdom` (and mermaid). --no-save
+# leaves no package.json, but it does leave this, and it was not ignored -- following the
+# repo's own instructions would have offered thousands of files to the next commit.
+node_modules/
+package-lock.json

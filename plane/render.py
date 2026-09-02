@@ -13,6 +13,25 @@ LABEL = {"verified": "verified", "stale": "needs re-checking", "applied": "not c
          "todo": "not set up", "unexpressible": "this app can't express it",
          None: "can't do this one"}
 EXTENSION_ID = "jkbakiglogodnlakhcadollfnekeogpd"
+
+
+def _manifest_version():
+    """-> the version in extension/manifest.json, or "" if it cannot be read.
+
+    Baked into the page so the page can compare it with the version the LOADED extension
+    reports. background.js is a service worker: Chrome keeps running the old one until
+    the extension is reloaded, so editing it and not reloading leaves you testing the
+    previous build while every file on disk says otherwise. That has cost a debugging
+    round already, and it looks exactly like a bug in the new code.
+    """
+    import json as _json
+    import pathlib as _pathlib
+    try:
+        here = _pathlib.Path(__file__).resolve().parent.parent
+        blob = (here / "extension" / "manifest.json").read_text(encoding="utf-8")
+        return str(_json.loads(blob).get("version") or "")
+    except Exception:                                     # noqa: BLE001
+        return ""
 # The safety property, as data: exactly one state reads as covered.
 COVERED_LOOK = {"verified"}
 
@@ -289,7 +308,8 @@ def _hero(plan):
             '<p class="sub">Each check opens the app in a new tab and reads the setting '
             'back. Read-only \u2014 this build has no way to change anything. If a login '
             'is needed, sign in and it keeps waiting.</p>',
-            '<div id="ext-missing" class="banner" hidden></div>']
+            '<div id="ext-missing" class="banner" hidden></div>',
+            '<div id="ext-stale" class="banner" hidden></div>']
 
     for rule_id, pairs in by_rule.items():
         rule = rules[rule_id]
@@ -376,6 +396,37 @@ def _verify_script():
     document.querySelectorAll(".vbtn").forEach(function (x) { x.disabled = true; });
     return;
   }
+
+  // Is the RUNNING extension the one on disk? Chrome keeps the old service worker until
+  // the extension is reloaded, so an edit you did not reload leaves you testing the
+  // previous build while every file says otherwise -- and it presents as the new code
+  // not working.
+  var ON_DISK = "%s";
+  chrome.runtime.sendMessage(EXT_ID, { type: "PING" }, function (res) {
+    if (chrome.runtime.lastError || !res || !res.version || !ON_DISK) return;
+    if (res.version === ON_DISK) return;
+    var b = document.getElementById("ext-stale");
+    b.hidden = false;
+    b.textContent = "The loaded extension is v" + res.version + " but extension/ on disk "
+      + "is v" + ON_DISK + ". Chrome is still running the old service worker — reload the "
+      + "extension at chrome://extensions, then reload this page. Until you do, you are "
+      + "testing the previous build.";
+  });
+  // A fixture can tell us a human changed something on it. We respond by RE-READING --
+  // never by believing the message. It carries no value, only the fact that a vendor
+  // moved, so nothing outside this page can put a number on it. A real vendor's page
+  // cannot send this at all, which is correct: the only way to learn what a real vendor
+  // says is to go and read it.
+  try {
+    new BroadcastChannel("policy-plane").addEventListener("message", function (ev) {
+      var d = ev.data || {};
+      if (d.type !== "VENDOR_CHANGED" || !d.surface) return;
+      document.querySelectorAll(".vbtn").forEach(function (b) {
+        if (b.dataset.surface === d.surface && !b.disabled) b.click();
+      });
+    });
+  } catch (err) { /* no BroadcastChannel: verification stays manual, which is fine */ }
+
   document.querySelectorAll(".vbtn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var rule = btn.dataset.rule, surface = btn.dataset.surface;
@@ -432,7 +483,7 @@ def _verify_script():
   });
 })();
 </script>
-""" % (EXTENSION_ID, json.dumps(VERDICT_WORDS))
+""" % (EXTENSION_ID, json.dumps(VERDICT_WORDS), _manifest_version())
 
 
 def _stat(value, label, cls):

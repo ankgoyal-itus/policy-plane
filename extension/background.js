@@ -14,6 +14,7 @@ const RECIPES = globalThis.PPRecipes;
 const ALLOWED_ORIGINS = new Set(["http://localhost:8787"]);
 
 const MAX_READY_MS = 120000;   // generous: a human may be logging in during this
+const CLOSE_DELAY_MS = 3000;  // long enough to read the page and the notice
 const POLL_MS = 500;
 
 function fail(code, error, extra) {
@@ -89,6 +90,71 @@ async function waitForReady(tabId, recipe) {
   return { ready: false, code: P.CODES.TIMEOUT };
 }
 
+/**
+ * Put a fixed notice at the top of a tab we are about to close.
+ *
+ * This is the ONE place the extension writes to a vendor page, and the boundaries are
+ * deliberate: the content is a constant in this file, it takes no argument from a recipe
+ * or from the dashboard, it runs only after a successful read, and it touches nothing but
+ * a banner element it creates itself. Recipes still have no verb for writing -- the
+ * action set is waitFor, click, read -- so nothing about what a recipe can do has
+ * changed. What has changed is that a tab no longer vanishes without saying why.
+ */
+async function announceClose(tabId, seconds) {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [seconds],
+      func: (secs) => {
+        const ID = "policy-plane-closing";
+        document.getElementById(ID)?.remove();
+        const bar = document.createElement("div");
+        bar.id = ID;
+        bar.setAttribute("role", "status");
+        bar.style.cssText = [
+          "position:fixed", "top:0", "left:0", "right:0", "z-index:2147483647",
+          "background:#1a7f4b", "color:#fff", "padding:11px 16px",
+          "font:600 14px/1.4 ui-sans-serif,-apple-system,'Segoe UI',Roboto,sans-serif",
+          "text-align:center", "box-shadow:0 1px 6px rgba(0,0,0,.25)",
+        ].join(";");
+        const say = (n) => {
+          bar.textContent = "Policy Plane read this page. Nothing was changed. "
+            + "Closing in " + n + "…";
+        };
+        say(secs);
+        document.documentElement.appendChild(bar);
+        let left = secs;
+        const t = setInterval(() => {
+          left -= 1;
+          if (left <= 0) { clearInterval(t); bar.textContent =
+            "Policy Plane read this page. Nothing was changed. Closing…"; return; }
+          say(left);
+        }, 1000);
+      },
+    });
+    return true;
+  } catch (e) {
+    return false;                 // the page blocks injection, or the tab is gone
+  }
+}
+
+
+/** Close a tab we opened. Never throws: a failure here must not lose a good reading. */
+async function closeTab(tabId) {
+  // Say what is about to happen, then wait. A tab that opens, does something invisible
+  // and disappears is unsettling on a page that holds a child's settings -- especially
+  // when the whole claim is that nothing was written.
+  await announceClose(tabId, Math.round(CLOSE_DELAY_MS / 1000));
+  await new Promise((r) => setTimeout(r, CLOSE_DELAY_MS));
+  try {
+    await chrome.tabs.remove(tabId);
+    return true;
+  } catch (e) {
+    return false;                 // already closed by the human, or gone
+  }
+}
+
+
 async function runRecipe(message) {
   const recipe = RECIPES[message.recipeId];
   if (!recipe) {
@@ -147,8 +213,19 @@ async function runRecipe(message) {
       args: [recipe, recipe.selectors, checked.params],
       func: (r, sels, params) => globalThis.PPDom.run(r, sels, params),
     });
+
+    // Tidy up after a SUCCESSFUL read only.
+    //
+    // A failed run leaves its tab open on purpose, and that is not politeness -- it is
+    // how the login case works. NEEDS_LOGIN means "a human has to sign in here"; closing
+    // the tab would take away the only place they can do it. TIMEOUT and
+    // SELECTOR_NOT_FOUND mean the page was not what the recipe expected, and the page
+    // is the evidence. Probe tabs stay open too: a probe exists to be looked at.
+    const closed = result && result.ok ? await closeTab(tab.id) : false;
+
     return Object.assign({ runId, recipeId: recipe.id, recipeVersion: recipe.version,
                            calibrated: recipe.calibrated !== false, tabId: tab.id,
+                           tabClosed: closed,
                            readyAnchor: { name: recipe.readyAnchor, matched: ready.matched } },
                          result);
   } catch (e) {

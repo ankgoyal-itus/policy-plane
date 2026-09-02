@@ -1,36 +1,139 @@
 <!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Vendor B — family settings (fixture)</title>
 <!--
   Shape 2: the genericity proof, and deliberately nothing like shape 1.
   Native <select> instead of a custom widget, a plain table instead of a drawer, no
   child picker, different vocabulary, value rendered as bare minutes. If the engine
   needs ANY change to read this, the abstraction is Roblox-shaped and wrong.
+
+  It stays visually plainer than Vendor A on purpose. Two fixtures that look alike prove
+  nothing; the point is that one engine reads both.
+
+  LOAD-BEARING FOR THE ENGINE:
+    #daily-allowance is read with textContent and must hold bare minutes -- no unit, no
+    badge. #allowance-select is read with optionList, which takes each <option>'s text,
+    so those must stay bare numbers too.
 -->
 <style>
- body{font:15px system-ui;margin:40px;max-width:720px}
- table{border-collapse:collapse;margin-top:14px}
- td,th{border:1px solid #ccc;padding:7px 12px;text-align:left}
+ body{font:15px/1.5 system-ui;margin:0;padding:40px 24px;color:#1c1c1a}
+ .wrap{max-width:620px;margin:0 auto}
+ h1{font-size:21px;margin:0 0 2px}
+ .who{color:#6b6b66;font-size:13px;margin:0 0 24px}
+ h2{font-size:15px;margin:0 0 10px}
+ table{border-collapse:collapse;margin:0 0 20px;width:100%}
+ td,th{border:1px solid #ccc;padding:8px 12px;text-align:left}
+ th{background:#f5f5f2;font-weight:600}
+ tr.changed td{background:#fdf0e2}
+ label{display:block;font-size:13px;color:#6b6b66;margin:0 0 4px}
+ select,button{font:inherit}
+ select{padding:6px 8px;border:1px solid #ccc}
+ button{margin-left:8px;padding:6px 14px;border:1px solid #1c1c1a;background:#1c1c1a;
+        color:#fff;cursor:pointer}
+ button[disabled]{opacity:.35;cursor:default}
+ .saved{margin-top:16px;border-left:3px solid #1a7f4b;background:#e6f4ec;color:#1a7f4b;
+        padding:10px 13px;font-size:13.5px}
+ .hidden{display:none}
+ .note{color:#6b6b66;font-size:12px;margin-top:26px}
 </style>
 
-<h1>Vendor B</h1>
-<div id="signed-in-as">parent@example.invalid</div>
+<div class="wrap">
+  <h1>Vendor B</h1>
+  <p class="who" id="signed-in-as">parent@example.invalid</p>
 
-<section id="limits">
-  <h2>Usage limits</h2>
-  <table>
-    <tr><th>Setting</th><th>Value</th></tr>
-    <tr><th id="row-daily">Daily allowance</th><td id="daily-allowance">60</td></tr>
-    <tr><th>Bedtime</th><td id="bedtime">21:00</td></tr>
-  </table>
+  <section id="limits">
+    <h2>Usage limits</h2>
+    <table>
+      <tr><th>Setting</th><th>Value</th></tr>
+      <tr id="row-daily-tr"><th id="row-daily">Daily allowance</th>
+          <!-- bare minutes: the engine reads this with textContent -->
+          <td id="daily-allowance">60</td></tr>
+      <tr><th>Bedtime</th><td id="bedtime">21:00</td></tr>
+    </table>
 
-  <label for="allowance-select">Change allowance</label>
-  <!-- Deliberately offers no 90. A vendor that cannot express the rule as written is
-       not a failure and not coverage -- it is its own verdict, and this fixture is the
-       only place that case can be demonstrated on demand. -->
-  <select id="allowance-select">
-    <option value="0">0</option>
-    <option value="30">30</option>
-    <option value="60" selected>60</option>
-    <option value="120">120</option>
-  </select>
-</section>
+    <label for="allowance-select">Change allowance (minutes per day)</label>
+    <!-- Deliberately offers no 90. A vendor that cannot express the rule as written is
+         not a failure and not coverage -- it is its own verdict, and this fixture is the
+         only place that case can be demonstrated on demand. -->
+    <select id="allowance-select">
+      <option value="0">0</option>
+      <option value="30">30</option>
+      <option value="60" selected>60</option>
+      <option value="120">120</option>
+    </select>
+    <button id="allowance-save" disabled>Save</button>
+
+    <div class="saved hidden" id="allowance-saved"></div>
+  </section>
+
+  <p class="note">Saving here changes only this page. The dashboard re-reads it and judges
+    the new value for itself — it never takes this page's word for anything.</p>
+</div>
+
+<script>
+(function () {
+  var cell   = document.getElementById("daily-allowance");
+  var row    = document.getElementById("row-daily-tr");
+  var select = document.getElementById("allowance-select");
+  var save   = document.getElementById("allowance-save");
+  var saved  = document.getElementById("allowance-saved");
+
+  // Same reasoning as Vendor A: the setting has to survive a page load, because the
+  // dashboard re-reads in a FRESH tab. Without it you save here, the re-read loads the
+  // static HTML back at its default, and the engine faithfully reports the old value.
+  var KEY = "pp-fixture-vendor-b-daily-allowance";
+  var offered = Array.prototype.map.call(select.options, function (o) { return o.value; });
+
+  function stored() {
+    try {
+      var v = localStorage.getItem(KEY);
+      // Only a value this page actually offers. Anything else would make the fixture
+      // display a setting that is not on its own list -- a lie the engine cannot detect.
+      return v && offered.indexOf(v) !== -1 ? v : null;
+    } catch (err) { return null; }
+  }
+
+  var committed = stored() || cell.textContent.trim();
+  cell.textContent = committed;                  // stays bare minutes
+  select.value = committed;
+
+  function paint() {
+    var differs = select.value !== committed;
+    save.disabled = !differs;
+    // The table cell keeps showing what is SAVED. The row is tinted while a different
+    // value is selected, so "picked" and "in force" are never the same signal.
+    row.className = differs ? "changed" : "";
+    save.textContent = differs ? "Save " + select.value : "Save";
+  }
+
+  select.addEventListener("change", function () {
+    saved.classList.add("hidden");
+    paint();
+  });
+
+  save.addEventListener("click", function (e) {
+    // isTrusted is false for a synthetic click. This build's engine has no write action
+    // and never clicks Save, so a click that did not come from a person means trouble.
+    if (!e.isTrusted) {
+      document.title = "SAVED BY SCRIPT — the read-only engine should never cause this";
+      return;
+    }
+    committed = select.value;
+    cell.textContent = committed;
+    try { localStorage.setItem(KEY, committed); } catch (err) { /* private mode */ }
+    saved.textContent = "✓ Saved — daily allowance is now " + committed
+                      + " minutes  ·  " + new Date().toLocaleTimeString();
+    saved.classList.remove("hidden");
+    paint();
+
+    // Tell the dashboard a human moved something. It replies by RE-READING this page,
+    // never by believing the message: no value travels with it, only the fact of change.
+    try {
+      new BroadcastChannel("policy-plane")
+        .postMessage({ type: "VENDOR_CHANGED", surface: "sim-vendor-b" });
+    } catch (err) { /* no BroadcastChannel: the dashboard will not auto-refresh */ }
+  });
+
+  paint();
+})();
+</script>
