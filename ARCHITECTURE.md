@@ -18,7 +18,7 @@ flowchart TD
     Y --> M --> P --> R --> PAGE
     PAGE -->|"recipe id + params only"| BG
     BG --> DOM --> VENDOR
-    VENDOR -->|"raw text: &quot;1 Hour&quot;, &quot;No limit&quot;, &quot;60&quot;"| DOM
+    VENDOR -->|"raw text — 1 Hour · No limit · 60"| DOM
     DOM --> BG -->|"readings, never a verdict"| PAGE
     PAGE -->|"POST /observations"| J --> V --> PAGE
 

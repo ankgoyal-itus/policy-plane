@@ -288,3 +288,45 @@ class PublishGate(unittest.TestCase):
         self.assertEqual(done.returncode, 0,
                          f"the leak checker cannot prove it fails:\n{done.stdout}\n{done.stderr}")
         self.assertIn("caught  a private token", done.stdout)
+
+
+class MermaidDiagrams(unittest.TestCase):
+    """Diagrams in markdown must survive GitHub's renderer.
+
+    A malformed mermaid block renders on GitHub as a red "Unable to render rich display"
+    box. That is worse than no diagram, and it is invisible from the markdown -- which is
+    exactly how one shipped.
+
+    The trap is that GitHub decodes HTML entities in the fenced block BEFORE handing it
+    to mermaid. `&quot;` inside an already-quoted edge label arrives as a bare `"` and
+    closes the label early. A checker that parses the raw text sees five harmless
+    characters and passes, which is a false green rather than no check at all.
+    """
+
+    def _blocks(self):
+        found = []
+        for path in sorted(harness.REPO.glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            for block in re.findall(r"```mermaid\n(.*?)```", text, re.S):
+                found.append((path.name, block))
+        return found
+
+    def test_no_html_entities_inside_a_mermaid_block(self):
+        for name, block in self._blocks():
+            with self.subTest(name):
+                entity = re.search(r"&(?:quot|apos|lt|gt|amp|nbsp|#\d+);", block)
+                self.assertIsNone(
+                    entity,
+                    f"{name}: mermaid block contains {entity.group(0) if entity else ''} — "
+                    "GitHub decodes it before parsing, so it will not mean what it looks "
+                    "like here. Write the character you want, or reword to avoid it.")
+
+    def test_no_quote_inside_a_quoted_mermaid_label(self):
+        """The specific failure: a nested quote closes the label early."""
+        for name, block in self._blocks():
+            for lineno, line in enumerate(block.splitlines(), 1):
+                for label in re.findall(r'\|"([^|]*)"\|', line):
+                    with self.subTest(f"{name}:{lineno}"):
+                        self.assertNotIn('"', label,
+                                         f'{name} line {lineno}: nested quote in an edge '
+                                         f'label — mermaid ends the label at the first one')
