@@ -62,6 +62,23 @@ devices:
     kind: console
     used_by: [alex, sam]
 
+  # Added after the first per-device view: both were in use and neither was modelled, so
+  # every gap on them was invisible. An unmodelled device is the one hole this page can
+  # never show you.
+  #
+  # Neither has a device surface, deliberately. Nothing in this house governs a laptop's
+  # browser, and nothing governs the TV directly -- they are reached only by the routers,
+  # which is exactly what the page should say rather than leaving them out.
+  - id: family-laptop
+    name: "Family laptop"
+    kind: computer
+    used_by: [alex, sam]
+
+  - id: living-room-tv
+    name: "Smart TV — living room"
+    kind: tv
+    used_by: [alex, sam]
+
 # Five rule kinds:  schedule · contact · content · time · purchase
 # A surface may only claim a kind in `can` if it also says `how` to do it.
 rules:
