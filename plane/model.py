@@ -32,6 +32,30 @@ class Kid:
 
 
 @dataclass(frozen=True)
+class Device:
+    """A piece of hardware in the house.
+
+    Distinct from a surface, and the distinction is the point. A SURFACE is a place a
+    setting can be changed; a DEVICE is a thing a child uses. One surface can govern
+    several devices (a network), one device can be governed by several surfaces (a phone
+    with both an OS control and an app's own), and a device can be governed by nothing at
+    all -- which is the case worth seeing and the one the model could not express before.
+
+    `kind` is deliberately coarse. It exists to group the page, not to drive behaviour;
+    nothing branches on it, so a wrong guess costs nothing.
+    """
+    id: str
+    name: str
+    kind: str                     # tablet · phone · console · computer · tv
+    used_by: tuple                # kid ids; a device nobody uses fails the load
+    on_home_network: bool = True  # is it behind the house routers?
+
+
+DEVICE_KINDS = ("tablet", "phone", "console", "computer", "tv")
+GOVERNS = ("account", "device", "network")
+
+
+@dataclass(frozen=True)
 class Rule:
     id: str
     kid: str
@@ -62,7 +86,9 @@ class Surface:
     name: str
     covers: tuple
     can: tuple
-    app: str = "*"        # the app it controls; "*" = device or network level
+    governs: str = "network"   # account · device · network
+    device: str = ""           # which device, when governs == "device"
+    app: str = "*"        # the app it controls; "*" for a device or network surface
     account: str = ""     # which of the kid's accounts its recipe needs, if any
     how: dict = field(default_factory=dict)      # kind -> How
     reach: str = ""
@@ -90,6 +116,14 @@ class Policy:
     rules: tuple
     surfaces: tuple
     records: tuple = ()
+    devices: tuple = ()
+
+    def device(self, did):
+        return next(d for d in self.devices if d.id == did)
+
+    def devices_of(self, kid_id):
+        """-> the devices this child uses, in declared order."""
+        return tuple(d for d in self.devices if kid_id in d.used_by)
 
     def rule(self, rid):
         return next(r for r in self.rules if r.id == rid)
@@ -167,7 +201,8 @@ def load(policy_path, status_path=None, overlay_path=None):
             if not isinstance(over, dict):
                 raise PolicyError(f"{overlay_path}: an overlay must be a mapping")
             raw = _merge(raw, over)
-    _keys(raw, {"version", "family", "kids", "rules", "surfaces"}, str(policy_path))
+    _keys(raw, {"version", "family", "kids", "rules", "surfaces", "devices"},
+          str(policy_path))
     if raw.get("version") != 1:
         raise PolicyError(f"{policy_path}: unsupported version {raw.get('version')!r}")
 
@@ -195,6 +230,35 @@ def load(policy_path, status_path=None, overlay_path=None):
     kid_by_id = {k.id: k for k in kids}
     _unique([k.id for k in kids], "kids")
 
+    # `devices` is optional: a policy written before devices existed still loads, and
+    # still means what it meant. What is NOT optional is that a declared device belongs
+    # to somebody -- a device nobody uses cannot be reasoned about, and silently keeping
+    # it would put a row on the page that no rule can ever reach.
+    devices = []
+    for i, d in enumerate(raw.get("devices") or []):
+        w = f"devices[{i}]"
+        _keys(d, {"id", "name", "kind", "used_by", "on_home_network"}, w)
+        kind = _req(d, "kind", w)
+        if kind not in DEVICE_KINDS:
+            raise PolicyError(f"{w}.kind: {kind!r} is not one of {list(DEVICE_KINDS)}")
+        used_by = d.get("used_by") or []
+        if not isinstance(used_by, list) or not used_by:
+            raise PolicyError(f"{w}.used_by: name at least one kid who uses this device")
+        unknown = [k for k in used_by if k not in kid_ids]
+        if unknown:
+            raise PolicyError(f"{w}.used_by: no such kid(s) {unknown}")
+        # A phone on cellular data is not behind the routers, so a network surface does
+        # not reach it. That hole is real and was previously only a sentence in `blind`
+        # that nothing could act on. Defaults to True because most hardware in a house
+        # is on the wifi, and the exception is worth stating explicitly.
+        on_net = d.get("on_home_network", True)
+        if not isinstance(on_net, bool):
+            raise PolicyError(f"{w}.on_home_network: expected true or false")
+        devices.append(Device(_req(d, "id", w), _req(d, "name", w), kind,
+                              tuple(used_by), on_net))
+    _unique([d.id for d in devices], "devices")
+    device_ids = {d.id for d in devices}
+
     rules = []
     for i, r in enumerate(_req(raw, "rules", str(policy_path))):
         w = f"rules[{i}]"
@@ -219,10 +283,40 @@ def load(policy_path, status_path=None, overlay_path=None):
     for i, s in enumerate(_req(raw, "surfaces", str(policy_path))):
         w = f"surfaces[{i}]"
         _keys(s, {"id", "name", "covers", "can", "app", "account", "reach", "blind",
-                  "link", "link_kind", "how", "redact", "recheck_days"}, w)
+                  "link", "link_kind", "how", "redact", "recheck_days",
+                  "governs", "device"}, w)
+
+        # REQUIRED, deliberately. Inferring it from `app` would preserve the exact
+        # ambiguity this removes: `app: "*"` cannot tell a device from a network, and
+        # those are different claims about different things.
+        governs = _req(s, "governs", w)
+        _one_of(governs, GOVERNS, f"{w}.governs")
+        device_id = s.get("device", "")
+        if governs == "device":
+            if not device_id:
+                raise PolicyError(f"{w}.device: a device surface must name the device "
+                                  "it governs")
+            if device_id not in device_ids:
+                raise PolicyError(f"{w}.device: no device called '{device_id}'")
+        elif device_id:
+            raise PolicyError(f"{w}.device: only a surface with governs: device may name "
+                              f"one; this one governs {governs}")
+        if governs == "account" and s.get("app", "*") == "*":
+            raise PolicyError(f"{w}.app: an account surface must name the app it governs, "
+                              "not '*'")
+
         for c in _req(s, "covers", w):
             if c not in kid_ids:
                 raise PolicyError(f"{w}.covers: no kid called '{c}'")
+        # A device surface cannot cover a child who does not use that device. Declaring
+        # both invites them to disagree, and the disagreement would be invisible.
+        if governs == "device":
+            users = next(d.used_by for d in devices if d.id == device_id)
+            strangers = [c for c in _req(s, "covers", w) if c not in users]
+            if strangers:
+                raise PolicyError(
+                    f"{w}.covers: claims {strangers}, but {device_id} is used by "
+                    f"{list(users)}")
         for c in _req(s, "can", w):
             _one_of(c, KINDS, f"{w}.can")
         link, link_kind = s.get("link", ""), s.get("link_kind", "")
@@ -240,6 +334,7 @@ def load(policy_path, status_path=None, overlay_path=None):
         surfaces.append(Surface(
             id=_req(s, "id", w), name=_req(s, "name", w),
             covers=tuple(s["covers"]), can=tuple(s["can"]),
+            governs=governs, device=device_id,
             app=s.get("app", "*"), account=s.get("account", ""), how=how,
             reach=s.get("reach", ""), blind=s.get("blind", ""),
             link=link, link_kind=link_kind,
@@ -249,7 +344,7 @@ def load(policy_path, status_path=None, overlay_path=None):
     records = _load_status(status_path, {r.id for r in rules},
                            {s.id for s in surfaces}) if status_path else ()
     return Policy(raw.get("family", "Family"), tuple(kids), tuple(rules),
-                  tuple(surfaces), records)
+                  tuple(surfaces), records, tuple(devices))
 
 
 def _load_status(path, rule_ids, surface_ids):
@@ -289,13 +384,41 @@ def carries(rule, surface):
     """True when this surface is in scope for this rule.
 
     Three gates, all of which must hold: it reaches the child, it handles that kind of
-    control, and it governs that app. The app gate is what stops a Roblox time limit
-    from being routed at Netflix -- `*` means the surface works at the device or network
-    level and governs everything on it.
+    control, and it governs that app.
+
+    The app gate is what stops a Roblox time limit from being routed at Netflix. It reads
+    off `governs` now rather than off a `*` in `app`: an ACCOUNT surface governs exactly
+    one app and carries a rule only if the app matches; a DEVICE or NETWORK surface
+    governs everything running on it and carries the rule whatever app it names. Those
+    were the same symbol before, which is why the model could not tell a device from a
+    network -- and therefore could not answer the one question worth asking, whether a
+    rule holds on every device a child actually uses.
     """
-    return (rule.kid in surface.covers
-            and rule.kind in surface.can
-            and (not rule.app or surface.app in ("*", rule.app)))
+    if surface.governs == "account":
+        app_ok = (not rule.app) or surface.app == rule.app
+    else:
+        app_ok = True
+    return rule.kid in surface.covers and rule.kind in surface.can and app_ok
+
+
+def reaches(surface, device):
+    """Does this surface govern this particular device?
+
+    The three kinds of surface answer differently, and the differences are the reason
+    `governs` exists:
+
+      account  — follows the child, not the hardware. It reaches the child wherever they
+                 sign in, so asking "does Roblox reach the iPad" is the wrong question;
+                 it is answered above the device axis, not inside it.
+      device   — reaches exactly the one it names.
+      network  — reaches every device behind the routers, and NOTHING else. A phone on
+                 cellular is outside it, which is a real hole rather than a technicality.
+    """
+    if surface.governs == "device":
+        return surface.device == device.id
+    if surface.governs == "network":
+        return device.on_home_network
+    return False           # account surfaces are not device-scoped; see the docstring
 
 
 def _how(raw, where):

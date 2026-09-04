@@ -26,6 +26,42 @@ kids:
   - id: sam
     name: "Sam, 9"
 
+# The hardware in the house. A DEVICE is a thing a child uses; a SURFACE is a place a
+# setting can be changed. They are not the same and the model kept pretending they were:
+# `app: "*"` meant both "this governs the whole device" and "this governs the whole
+# network", which are different claims about different things.
+#
+# A device may be governed by several surfaces, by one, or by NONE -- and the last case is
+# the one worth seeing. It is invisible until devices are named.
+devices:
+  - id: alex-ipad
+    name: "Alex's iPad"
+    kind: tablet
+    used_by: [alex]
+
+  - id: alex-iphone
+    name: "Alex's iPhone"
+    kind: phone
+    used_by: [alex]
+
+  - id: sam-android
+    name: "Sam's Android phone"
+    kind: phone
+    used_by: [sam]
+    # On cellular data when he is out, so the house routers do not reach it. The one
+    # device here that a network surface genuinely cannot cover.
+    on_home_network: false
+
+  - id: living-room-xbox
+    name: "Xbox — living room"
+    kind: console
+    used_by: [alex, sam]
+
+  - id: living-room-switch
+    name: "Nintendo Switch — living room"
+    kind: console
+    used_by: [alex, sam]
+
 # Five rule kinds:  schedule · contact · content · time · purchase
 # A surface may only claim a kind in `can` if it also says `how` to do it.
 rules:
@@ -96,6 +132,8 @@ rules:
 surfaces:
 
   - id: screentime-ipad
+    governs: device
+    device: alex-ipad
     app: "*"
     name: "Screen Time — Alex's iPad"
     covers: [alex]
@@ -147,6 +185,8 @@ surfaces:
         check: "In-app Purchases reads Don't Allow and Ask To Buy is on"
 
   - id: family-link-sam
+    governs: device
+    device: sam-android
     app: "*"
     name: "Family Link — Sam's phone"
     covers: [sam]
@@ -190,6 +230,7 @@ surfaces:
         check: "'Require approval for' reads All content"
 
   - id: nextdns-home
+    governs: network
     app: "*"
     name: "NextDNS — home wifi"
     covers: [alex, sam]
@@ -212,7 +253,42 @@ surfaces:
           - "Turn on Block Bypass Methods so VPN and DoH can't route around it"
         check: "The blocked services list is right and Block Bypass Methods is ON"
 
+  # The second network over the same house, and deliberately not a duplicate of NextDNS.
+  # NextDNS filters what can be reached and cannot express a schedule at all; the router
+  # can pause a device group on a timetable. Two surfaces of the same type that carry
+  # different kinds is exactly the case the routing gate has to get right.
+  - id: nest-wifi-home
+    governs: network
+    name: "Google Nest Wifi — home routers"
+    covers: [alex, sam]
+    can: [schedule, content]
+    reach: "Anything on the home wifi, grouped by device"
+    blind: "Cellular data; a device on a neighbour's wifi; anything using DNS-over-HTTPS
+      to bypass the router"
+    link: "https://home.google.com/"
+    link_kind: official
+    recheck_days: 60
+    how:
+      schedule:
+        accepts: [not_after, not_before, days]
+        options: "Scheduled pause per device group, repeating by day"
+        steps:
+          - "Google Home app → Wi-Fi → Family Wi-Fi → Schedules"
+          - "Pick the device group, set the window and the days"
+        check: "The schedule is on and the window matches the rule"
+      content:
+        accepts: [max_maturity]
+        options: "SafeSearch and site blocking per device group, not a rating scale"
+        maps:
+          kids: "Block explicit"
+          preteen: "Block explicit"
+        steps:
+          - "Google Home app → Wi-Fi → Family Wi-Fi → Site blocking"
+          - "Turn on filtering for the device group"
+        check: "Filtering shows as on for the group"
+
   - id: roblox-alex
+    governs: account
     app: "roblox"
     name: "Roblox — Alex's account"
     covers: [alex]
@@ -265,6 +341,7 @@ surfaces:
         check: "A monthly Robux spend limit is set"
 
   - id: youtube-alex
+    governs: account
     app: "youtube"
     name: "YouTube — Alex's supervised account"
     covers: [alex]
@@ -289,6 +366,8 @@ surfaces:
         check: "Content setting matches Alex's age and autoplay is off"
 
   - id: xbox-living-room
+    governs: device
+    device: living-room-xbox
     app: "*"
     name: "Xbox — living room console"
     covers: [alex, sam]
@@ -342,6 +421,7 @@ surfaces:
   # seen reaching several vendors that word the same setting differently. They govern
   # nothing. Both are reached over localhost and are inert if the server is not running.
   - id: sim-vendor-a
+    governs: account
     app: roblox
     account: roblox
     name: "Vendor A"
@@ -363,6 +443,7 @@ surfaces:
         check: "The Daily limit row shows the minutes the rule asks for"
 
   - id: sim-vendor-b
+    governs: account
     app: roblox
     account: roblox
     name: "Vendor B"

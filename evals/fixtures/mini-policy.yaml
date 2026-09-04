@@ -26,6 +26,7 @@ rules:
 surfaces:
   - id: only
     name: "Only Surface"
+    governs: network
     app: "*"
     covers: [kid]
     can: [schedule, contact]
@@ -45,6 +46,7 @@ surfaces:
         options: "Family only, or everyone"
   - id: second
     name: "Second Surface"
+    governs: network
     app: "*"
     covers: [kid]
     can: [schedule]

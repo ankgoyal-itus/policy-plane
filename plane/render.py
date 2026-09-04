@@ -166,11 +166,8 @@ def render(plan):
                'only a reading you have actually taken counts as in force</p>')
 
     out.append('<div class="stats">')
-    out.append(_stat(s["pairs_covered"], "confirmed", "good" if s["pairs_covered"] else ""))
-    out.append(_stat(s["todo_count"], "need attention", "warn" if s["todo_count"] else ""))
-    out.append(_stat(s["rules_fully_uncovered"], "rules with nothing in force",
-                     "warn" if s["rules_fully_uncovered"] else ""))
-    out.append(_stat(s["pairs_stale"], "gone stale", "warn" if s["pairs_stale"] else ""))
+    for tile in stat_tiles(s):
+        out.append(_stat(tile))
     out.append("</div>")
 
     # The verification panel leads. It is the only part of this page that establishes
@@ -186,6 +183,14 @@ def render(plan):
               + LEGEND + "</p>")
     out.append(_fold("Where each rule stands", f"{len(plan['surfaces'])} surfaces",
                      _matrix(plan) + legend))
+
+    devices = plan.get("by_device") or []
+    if devices:
+        gaps = sum(d["unreachable"] for d in devices)
+        out.append(_fold(
+            "Every device, one by one",
+            f"{len(devices)} pairings · {gaps} rules with nowhere to land",
+            _device_section(devices)))
 
     out.append(_fold("Rules", f"{len(plan['rules'])} written",
                      "".join(_rule_card(r, plan) for r in plan["rules"])))
@@ -378,6 +383,16 @@ def _verify_script():
       + esc(w[1]) + '<small>' + esc(w[2]) + '</small></p></div>'
       + '</div><p class="stamp">' + esc(stamp) + '</p>';
   }
+  function paintStats(stats) {
+    if (!Array.isArray(stats)) return;          // no stats: leave what is on screen
+    stats.forEach(function (t) {
+      var el = document.querySelector('.stat[data-stat="' + t.key + '"]');
+      if (!el) return;
+      el.className = "stat " + (t.cls || "");
+      el.querySelector("b").textContent = t.value;
+    });
+  }
+
   function problemHtml(text) {
     return '<p class="vsub"><span class="chip warn">Not checked</span> '
            + esc(text) + '</p>';
@@ -474,6 +489,11 @@ def _verify_script():
           var stamp = "read just now · recipe " + btn.dataset.recipe
                     + (offered ? " · " + offered + " values on offer" : "");
           out.innerHTML = reveal(declared, vendor, saved.judged.said, saved.judged, stamp);
+          // The hero tiles, recomputed by the server from the same plan this row came
+          // from. The page writes the strings in and counts nothing itself -- a second
+          // counting path here is exactly how the tiles and the checklist became two
+          // implementations of one number.
+          paintStats(saved.stats);
         }).catch(function (e) {
           problem(out, "read fine, but could not record it: " + e
                        + ". Is build.py --serve running?");
@@ -486,8 +506,71 @@ def _verify_script():
 """ % (EXTENSION_ID, json.dumps(VERDICT_WORDS), _manifest_version())
 
 
-def _stat(value, label, cls):
-    return f'<div class="stat {cls}"><b>{value}</b><span>{_e(label)}</span></div>'
+def stat_tiles(summary):
+    """-> [{key, value, label, cls}] for the hero tiles.
+
+    THE one place a tile number is decided. The server-rendered page and the live update
+    after a reading both come through here, so they cannot disagree -- and there is no
+    counting logic in JavaScript to drift away from the counting logic in Python. That
+    drift is exactly what let `todo_count` and `len(checklist)` become two independent
+    implementations of the same number.
+    """
+    s = summary
+    read = s["pairs_covered_read"]
+    return [
+        # Nothing read yet is not the same claim as "zero of what we read is in force".
+        # A dash says we have not looked; a 0 says we looked and found none.
+        {"key": "read", "label": "in force, read",
+         "value": "—" if not s["pairs_observed"] else str(read),
+         "cls": "good" if read else ""},
+        {"key": "attested", "label": "in force, attested by you",
+         "value": str(s["pairs_covered_attested"]), "cls": ""},
+        {"key": "todo", "label": "need attention",
+         "value": str(s["todo_count"]), "cls": "warn" if s["todo_count"] else ""},
+        {"key": "uncovered", "label": "rules with nothing in force",
+         "value": str(s["rules_fully_uncovered"]),
+         "cls": "warn" if s["rules_fully_uncovered"] else ""},
+        {"key": "stale", "label": "gone stale",
+         "value": str(s["pairs_stale"]), "cls": "warn" if s["pairs_stale"] else ""},
+    ]
+
+
+def _stat(tile):
+    return (f'<div class="stat {tile["cls"]}" data-stat="{_e(tile["key"])}">'
+            f'<b>{_e(tile["value"])}</b><span>{_e(tile["label"])}</span></div>')
+
+
+def _device_section(devices):
+    """One block per child-and-device: what holds there, and what cannot reach it.
+
+    Account surfaces are absent on purpose. Roblox follows Alex rather than the iPad, so
+    listing it under four devices would show one reading four times and read as four
+    checks. It is answered above, once.
+    """
+    bits = ['<p class="sub">A rule reaches a device only through a surface that both '
+            'carries the rule and reaches that device. A rule with nowhere to land here '
+            'is a real gap, not a missing tick.</p>']
+    for d in devices:
+        off = ("" if d["on_home_network"] else
+               '<span class="chip warn">not on the home wifi</span>')
+        bits.append(
+            f'<div class="card"><h3>{_e(d["device_name"])} '
+            f'<span class="chip">{_e(d["kind"])}</span>'
+            f'<span class="chip">{_e(d["kid_name"])}</span>{off}</h3>')
+        stuck = [r for r in d["rules"] if not r["reachable"]]
+        bits.append(f'<p class="opt">{d["held"]} of {len(d["rules"])} rules in force here'
+                    + (f' · {len(stuck)} cannot reach it at all' if stuck else '') + '</p>')
+        for r in d["rules"]:
+            if r["reachable"]:
+                mark = "ok" if r["state"] in COVERED_LOOK else "warn"
+                where = ", ".join(r["via"])
+                bits.append(f'<p class="opt"><span class="pill {mark}">{_e(r["kind"])}'
+                            f'</span> {_e(r["say"])} <em>via {_e(where)}</em></p>')
+            else:
+                bits.append(f'<p class="opt"><span class="pill warn">nowhere</span> '
+                            f'{_e(r["say"])}</p>')
+        bits.append("</div>")
+    return "".join(bits)
 
 
 def _matrix(plan):

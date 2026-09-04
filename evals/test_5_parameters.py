@@ -19,7 +19,7 @@ import yaml
 
 from evals import harness
 from plane import params as P
-from plane.model import PolicyError, load
+from plane.model import PolicyError, Rule, carries, load
 from plane.plan import build
 
 REAL = harness.REPO / "policy.yaml"
@@ -197,3 +197,191 @@ class PartialIsNotCovered(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DevicesAreRealThings(unittest.TestCase):
+    """A device is a thing a child uses; a surface is a place a setting can be changed.
+
+    The model conflated them, and `app: "*"` carried two unrelated meanings — "governs
+    this whole device" and "governs this whole network". Naming devices separates the
+    two, and makes visible the case that mattered and could not be said at all: hardware
+    in the house that no surface reaches.
+    """
+
+    def _load(self, devices, kids=None):
+        # A REAL rule and surface, not empty lists. Empty ones fail _req first, so every
+        # assertRaises below would have passed on "missing required key 'rules'" without
+        # ever reaching the device validation it names. Four of these did exactly that
+        # until the one test that expects success caught it.
+        kids = kids or [{"id": "alex", "name": "Alex, 12"}]
+        doc = {
+            "version": 1, "family": "T", "kids": kids, "devices": devices,
+            "rules": [{"id": "r", "kid": kids[0]["id"], "kind": "time",
+                       "params": {"minutes_per_day": 60}}],
+            "surfaces": [{"id": "s", "governs": "network", "app": "*", "name": "S",
+                          "covers": [kids[0]["id"]], "can": ["time"],
+                          "reach": "x", "blind": "y", "link": "http://x.invalid",
+                          "link_kind": "official", "recheck_days": 30,
+                          "how": {"time": {"accepts": ["minutes_per_day"],
+                                           "steps": ["x"], "check": "y"}}}],
+        }
+        path = harness.FIXTURES / "_tmp-devices.yaml"
+        path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+        try:
+            return load(path)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_a_device_belongs_to_somebody(self):
+        """A device nobody uses cannot be reasoned about, so it fails the load."""
+        for used_by in ([], None):
+            with self.subTest(repr(used_by)):
+                with self.assertRaises(PolicyError) as caught:
+                    self._load([{"id": "d", "name": "D", "kind": "tablet",
+                                 "used_by": used_by}])
+                self.assertIn("used_by", str(caught.exception))
+
+    def test_a_device_cannot_name_a_kid_who_does_not_exist(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load([{"id": "d", "name": "D", "kind": "tablet", "used_by": ["ghost"]}])
+        self.assertIn("ghost", str(caught.exception))
+
+    def test_an_unknown_kind_fails_rather_than_passing_through(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load([{"id": "d", "name": "D", "kind": "toaster", "used_by": ["alex"]}])
+        self.assertIn("toaster", str(caught.exception))
+
+    def test_two_devices_cannot_share_an_id(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load([{"id": "d", "name": "One", "kind": "phone", "used_by": ["alex"]},
+                        {"id": "d", "name": "Two", "kind": "phone", "used_by": ["alex"]}])
+        self.assertIn("devices", str(caught.exception))
+
+    def test_a_policy_without_devices_still_loads(self):
+        """The block is optional. A policy written before devices existed still means
+        exactly what it meant."""
+        policy = load(harness.REPO / "evals" / "fixtures" / "mini-policy.yaml")
+        self.assertEqual(policy.devices, ())
+
+    def test_a_shared_device_is_used_by_every_child_named(self):
+        policy = self._load(
+            [{"id": "xbox", "name": "Xbox", "kind": "console", "used_by": ["alex", "sam"]}],
+            kids=[{"id": "alex", "name": "Alex, 12"}, {"id": "sam", "name": "Sam, 9"}])
+        self.assertEqual([d.id for d in policy.devices_of("alex")], ["xbox"])
+        self.assertEqual([d.id for d in policy.devices_of("sam")], ["xbox"])
+
+    def test_the_shipped_policy_names_a_device_for_every_kid(self):
+        """A child with no device is a modelling gap, not a valid state."""
+        policy = load(harness.REPO / "policy.yaml", harness.REPO / "status.yaml")
+        self.assertTrue(policy.devices, "the shipped policy declares no devices")
+        for kid in policy.kids:
+            with self.subTest(kid.id):
+                self.assertTrue(policy.devices_of(kid.id),
+                                f"{kid.id} uses no device; the fan-out would have nothing "
+                                "to ask about")
+
+
+class SurfacesSayWhatTheyGovern(unittest.TestCase):
+    """`app: "*"` meant two unrelated things and had to stop.
+
+    It said "governs this whole device" and "governs this whole network" with the same
+    symbol, so nothing could tell a phone's OS control from the router the phone is on.
+    `governs` separates them, and it is required rather than inferred — inferring it from
+    `app` would preserve exactly the ambiguity being removed.
+    """
+
+    def _surface(self, **over):
+        base = {"id": "s", "name": "S", "covers": ["alex"], "can": ["time"],
+                "governs": "network", "app": "*", "reach": "x", "blind": "y",
+                "link": "http://x.invalid", "link_kind": "official", "recheck_days": 30,
+                "how": {"time": {"accepts": ["minutes_per_day"], "steps": ["x"],
+                                 "check": "y"}}}
+        base.update(over)
+        return base
+
+    def _load(self, surface, devices=()):
+        doc = {"version": 1, "family": "T",
+               "kids": [{"id": "alex", "name": "Alex, 12"},
+                        {"id": "sam", "name": "Sam, 9"}],
+               "devices": list(devices),
+               "rules": [{"id": "r", "kid": "alex", "kind": "time",
+                          "params": {"minutes_per_day": 60}}],
+               "surfaces": [surface]}
+        path = harness.FIXTURES / "_tmp-governs.yaml"
+        path.write_text(yaml.safe_dump(doc), encoding="utf-8")
+        try:
+            return load(path)
+        finally:
+            path.unlink(missing_ok=True)
+
+    IPAD = {"id": "ipad", "name": "iPad", "kind": "tablet", "used_by": ["alex"]}
+
+    def test_governs_is_required(self):
+        s = self._surface()
+        del s["governs"]
+        with self.assertRaises(PolicyError) as caught:
+            self._load(s)
+        self.assertIn("governs", str(caught.exception))
+
+    def test_governs_must_be_one_of_the_three(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="vibes"))
+        self.assertIn("vibes", str(caught.exception))
+
+    def test_a_device_surface_must_name_its_device(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="device"), devices=[self.IPAD])
+        self.assertIn("must name the device", str(caught.exception))
+
+    def test_a_device_surface_cannot_name_a_device_that_does_not_exist(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="device", device="ghost"),
+                       devices=[self.IPAD])
+        self.assertIn("ghost", str(caught.exception))
+
+    def test_only_a_device_surface_may_name_a_device(self):
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="network", device="ipad"),
+                       devices=[self.IPAD])
+        self.assertIn("device", str(caught.exception))
+
+    def test_an_account_surface_must_name_its_app(self):
+        """`*` on an account surface is the old ambiguity wearing a new name."""
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="account", app="*"))
+        self.assertIn("app", str(caught.exception))
+
+    def test_a_device_surface_cannot_cover_a_child_who_does_not_use_it(self):
+        """Declaring covers AND used_by invites them to disagree, invisibly."""
+        with self.assertRaises(PolicyError) as caught:
+            self._load(self._surface(governs="device", device="ipad",
+                                     covers=["alex", "sam"]),
+                       devices=[self.IPAD])
+        self.assertIn("sam", str(caught.exception))
+
+    def test_an_account_surface_carries_only_its_own_app(self):
+        policy = self._load(self._surface(governs="account", app="roblox"))
+        surface = policy.surfaces[0]
+        roblox = Rule("r1", "alex", "time", {"minutes_per_day": 60}, app="roblox")
+        netflix = Rule("r2", "alex", "time", {"minutes_per_day": 60}, app="netflix")
+        self.assertTrue(carries(roblox, surface))
+        self.assertFalse(carries(netflix, surface),
+                         "an account surface carried a rule about a different app")
+
+    def test_device_and_network_surfaces_carry_any_app(self):
+        """They govern everything running on them, whatever it is called."""
+        for governs, extra, devs in (("network", {}, ()),
+                                     ("device", {"device": "ipad"}, [self.IPAD])):
+            with self.subTest(governs):
+                policy = self._load(self._surface(governs=governs, **extra), devices=devs)
+                rule = Rule("r", "alex", "time", {"minutes_per_day": 60}, app="roblox")
+                self.assertTrue(carries(rule, policy.surfaces[0]))
+
+    def test_the_shipped_policy_declares_governs_everywhere(self):
+        policy = load(harness.REPO / "policy.yaml", harness.REPO / "status.yaml")
+        for s in policy.surfaces:
+            with self.subTest(s.id):
+                self.assertIn(s.governs, ("account", "device", "network"))
+                if s.governs == "device":
+                    self.assertTrue(s.device, f"{s.id} governs a device but names none")
+                    policy.device(s.device)          # raises if it does not exist

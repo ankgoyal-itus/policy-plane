@@ -163,7 +163,51 @@ def build(policy, today, observations=()):
         "cells": cells,
         "checklist": sorted(checklist, key=lambda c: (c["surface"], c["rule"])),
         "summary": _summary(rules_out, cells),
+        "by_device": _by_device(policy, cells),
     }
+
+
+def _by_device(policy, cells):
+    """-> [{kid, device, rules:[...]}] — the per-device answer.
+
+    The question the matrix could never answer: for THIS child, on THIS device, does the
+    rule hold? A rule reaches a device through a surface that both carries the rule and
+    reaches the device, and a device reached by nothing is the finding, not an omission.
+
+    Account surfaces are deliberately absent. An account follows the child rather than the
+    hardware, so "does Roblox reach the iPad" is the wrong question -- it is answered once,
+    above this, rather than repeated under every device as though several checks had run.
+    """
+    from plane.model import carries, reaches
+
+    out = []
+    for kid in policy.kids:
+        for device in policy.devices_of(kid.id):
+            rows = []
+            for rule in policy.rules:
+                if rule.kid != kid.id:
+                    continue
+                via = [s for s in policy.surfaces
+                       if carries(rule, s) and reaches(s, device)]
+                # Best state wins: one surface holding the rule is enough for the device.
+                states = [cells[(rule.id, s.id)]["state"] for s in via
+                          if cells.get((rule.id, s.id), {}).get("applicable")]
+                held = any(st in COVERED_STATES for st in states)
+                rows.append({
+                    "rule": rule.id, "say": rule.say, "kind": rule.kind,
+                    "via": [s.id for s in via],
+                    "state": VERIFIED if held else (states[0] if states else None),
+                    "reachable": bool(via),
+                })
+            out.append({
+                "kid": kid.id, "kid_name": kid.short,
+                "device": device.id, "device_name": device.name,
+                "kind": device.kind, "on_home_network": device.on_home_network,
+                "rules": rows,
+                "held": sum(1 for r in rows if r["state"] in COVERED_STATES),
+                "unreachable": sum(1 for r in rows if not r["reachable"]),
+            })
+    return out
 
 
 # rule param name -> the name the recipe's own schema uses. Recipes are written to a
@@ -282,6 +326,12 @@ def _summary(rules_out, cells):
         "rules_with_no_surface": sum(1 for r in rules_out if not r["reachable"]),
         "pairs_applicable": len(applicable),
         "pairs_covered": len(covered),
+        # A pair can be covered two very different ways, and one hero number reading
+        # "4 confirmed" hid the difference: a reading the extension actually took, or a
+        # box a parent ticked in status.yaml. This page argues those are not the same
+        # thing, so it should not add them together in its largest type.
+        "pairs_covered_read": sum(1 for c in covered if c.get("observed")),
+        "pairs_covered_attested": sum(1 for c in covered if not c.get("observed")),
         "pairs_stale": sum(1 for c in applicable if c["state"] == STALE),
         "pairs_applied_unconfirmed": sum(1 for c in applicable if c["state"] == APPLIED),
         "pairs_todo": sum(1 for c in applicable if c["state"] == TODO),

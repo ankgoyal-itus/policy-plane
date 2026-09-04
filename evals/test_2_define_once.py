@@ -73,7 +73,8 @@ class DefineOnce(unittest.TestCase):
         raw = base()
         raw["surfaces"].append({
             "id": "third", "name": "Third Surface", "covers": ["kid"],
-            "can": ["schedule", "purchase"], "recheck_days": 30, "app": "*",
+            "can": ["schedule", "purchase"], "recheck_days": 30,
+            "governs": "network", "app": "*",
             "how": {"schedule": {"steps": ["Third route"], "check": "Third check",
                                  "accepts": ["not_after", "days"]},
                     "purchase": {"steps": ["Buy screen"], "check": "Approvals are on",

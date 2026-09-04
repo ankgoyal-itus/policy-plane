@@ -263,6 +263,17 @@ def serve(stale_reason=""):
                 # A judge that fails must not look like a verdict.
                 payload["judged"] = None
                 payload["judge_error"] = f"{type(exc).__name__}: {exc}"
+            try:
+                # The hero tiles, recomputed from the SAME plan the rows come from and
+                # rendered by the same function the page used. The page writes these
+                # strings in; it does not count anything itself. Before this, the tiles
+                # were server-rendered once and never touched again, so a reading you
+                # had just taken did not move the largest numbers on the page -- a
+                # snapshot presented as if it were live.
+                payload["stats"] = _stats_now()
+            except Exception as exc:                  # noqa: BLE001
+                payload["stats"] = None
+                payload["stats_error"] = f"{type(exc).__name__}: {exc}"
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -442,6 +453,19 @@ def _judge_one(observation):
                  if readings.get(k)), None)
     return {"verdict": verdict["verdict"], "why": verdict["why"], "said": said,
             "in_force": verdict["in_force"]}
+
+
+def _stats_now():
+    """-> the hero tiles as they stand right now, straight from plane.render."""
+    PolicyError, load, build_plan, render_page, observe = _imports()
+    import datetime as _dt
+    from plane.render import stat_tiles
+    policy_path, policy_overlay = _pick("policy")
+    status_path, status_overlay = _pick("status")
+    policy = load(policy_path, status_overlay or status_path, overlay_path=policy_overlay)
+    plan = build_plan(policy, _dt.date.today().isoformat(),
+                      observe.load_observations(OBSERVATIONS))
+    return stat_tiles(plan["summary"])
 
 
 def _pick(stem):
