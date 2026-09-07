@@ -8,6 +8,7 @@
 import "./engine/pure.js";
 import "./recipes/vendor-a-verify.js";
 import "./recipes/vendor-b-verify.js";
+import "./recipes/family-console-schedule-verify.js";
 
 const P = globalThis.PPPure;
 const RECIPES = globalThis.PPRecipes;
@@ -33,8 +34,8 @@ async function inject(tabId) {
   });
 }
 
-async function anchorPresent(tabId, recipe) {
-  const candidates = recipe.selectors[recipe.readyAnchor] || [];
+async function anchorPresent(tabId, recipe, selectors) {
+  const candidates = selectors[recipe.readyAnchor] || [];
   try {
     // Inject the engine and use ITS resolver. This used to be a second, simpler
     // selector implementation living here, which is how the "ci:" case-insensitive
@@ -71,11 +72,11 @@ async function anchorPresent(tabId, recipe) {
  * selector exists", polled. That also makes the login case free: while the human signs
  * in, the anchor simply is not there yet, and we keep waiting.
  */
-async function waitForReady(tabId, recipe) {
+async function waitForReady(tabId, recipe, selectors) {
   const deadline = Date.now() + MAX_READY_MS;
   let sawTab = false;
   while (Date.now() < deadline) {
-    const got = await anchorPresent(tabId, recipe);
+    const got = await anchorPresent(tabId, recipe, selectors);
     if (got.present) {
       return { ready: true, matched: got.matched,
                waitedMs: MAX_READY_MS - (deadline - Date.now()) };
@@ -168,6 +169,10 @@ async function runRecipe(message) {
   const checked = P.validateParams(recipe.params, message.params);
   if (!checked.ok) return checked;
 
+  const filled = P.applySelectorParams(recipe.selectors, checked.params);
+  if (!filled.ok) return filled;
+  const selectors = filled.selectors;
+
   // The recipe owns the URL TEMPLATE; the page supplies only values, and only values
   // the recipe's schema already validated. childUserId is an integer, so it cannot
   // contain a path separator or a scheme. The origin is re-checked afterwards anyway.
@@ -186,7 +191,7 @@ async function runRecipe(message) {
   const runId = crypto.randomUUID();
   const tab = await chrome.tabs.create({ url, active: true });
 
-  const ready = await waitForReady(tab.id, recipe);
+  const ready = await waitForReady(tab.id, recipe, selectors);
   if (!ready.ready) {
     return fail(ready.code,
                 ready.code === P.CODES.TIMEOUT
@@ -210,7 +215,7 @@ async function runRecipe(message) {
     }
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      args: [recipe, recipe.selectors, checked.params],
+      args: [recipe, selectors, checked.params],
       func: (r, sels, params) => globalThis.PPDom.run(r, sels, params),
     });
 

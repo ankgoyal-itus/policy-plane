@@ -25,6 +25,11 @@ kids:
         id: 999999999999
   - id: sam
     name: "Sam, 9"
+    accounts:
+      # For sim-family-console only -- a placeholder identity for a fixture that proves
+      # the multi-child-roster shape, not a real Family Link account.
+      family_console:
+        username: sam_example
 
 # The hardware in the house. A DEVICE is a thing a child uses; a SURFACE is a place a
 # setting can be changed. They are not the same and the model kept pretending they were:
@@ -482,3 +487,29 @@ surfaces:
         steps:
           - "Open the fixture page"
         check: "Daily allowance shows the minutes the rule asks for"
+
+  # Shape 3: several children on ONE page, no per-child URL. Proves the engine can
+  # search a roster for a name that is a runtime parameter -- Roblox is routed by id in
+  # the URL, Vendor A/B pick one child from a <select>, and nothing built before this had
+  # to find one child among several. Governs nothing real.
+  - id: sim-family-console
+    governs: account
+    app: family_console
+    account: family_console
+    name: "Family Console (fixture)"
+    covers: [sam]
+    can: [schedule]
+    reach: "Nothing. A test double with several children on one roster page."
+    blind: "Everything — it governs no real device and no real account."
+    link: "http://localhost:8787/extension/test/fixtures/family-console.html"
+    link_kind: official
+    recheck_days: 30
+    how:
+      schedule:
+        accepts: [not_after]
+        recipe: family-console-schedule-verify
+        options: "7:00 PM, 8:00 PM, 8:30 PM, 9:00 PM, or Off"
+        steps:
+          - "Open the fixture page"
+          - "Click the child's row to open their panel"
+        check: "The bedtime cutoff shown matches the rule"

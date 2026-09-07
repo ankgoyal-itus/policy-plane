@@ -511,7 +511,78 @@ test("every persisting fixture both reads and writes its key", () => {
                  `${file} reads a saved value but never writes one — saving will not `
                  + "survive the fresh tab the dashboard opens to re-read");
   }
-  assert.strictEqual(persisting, 2,
-                     `${persisting} fixtures persist state; expected both vendor-a and `
-                     + "vendor-b, so one has stopped");
+  assert.strictEqual(persisting, 3,
+                     `${persisting} fixtures persist state; expected vendor-a, vendor-b `
+                     + "and family-console, so one has stopped");
+});
+
+// --- selector param templating -------------------------------------------------------
+//
+// A family-roster page lists several children on ONE page; the extension needs to
+// search for THIS child's name, and that name is a runtime parameter, not something a
+// recipe author can hardcode. Scoped to "ci:" selectors only, deliberately: their text
+// is already concatenated into an XPath string with quotes already stripped from it for
+// exactly this reason, so a substituted parameter lands inside that same protection. A
+// raw hand-written XPath has no such stripping anywhere in it.
+
+test("a ci: selector's {{param}} is filled from the params object", () => {
+  const out = P.applySelectorParams(
+    { "child.row": ["ci:{{childUsername}}", "ci:fallback"] },
+    { childUsername: "alex_example" });
+  assert.strictEqual(out.ok, true);
+  assert.deepStrictEqual(out.selectors["child.row"], ["ci:alex_example", "ci:fallback"]);
+});
+
+test("a selector with no {{}} in it passes through unchanged", () => {
+  const out = P.applySelectorParams({ x: ["#static", "ci:literal text"] }, { a: "1" });
+  assert.deepStrictEqual(out.selectors.x, ["#static", "ci:literal text"]);
+});
+
+test("templating outside a ci: selector is refused, not silently trusted", () => {
+  const out = P.applySelectorParams(
+    { risky: ["//div[@id='{{childUsername}}']"] }, { childUsername: "alex" });
+  assert.strictEqual(out.ok, false);
+  assert.strictEqual(out.code, "BAD_PARAMS");
+  assert.match(out.error, /outside a "ci:" selector/);
+});
+
+test("a param not supplied leaves an unfilled slot, and that fails rather than shipping a literal {{...}}", () => {
+  const out = P.applySelectorParams(
+    { "child.row": ["ci:{{childUsername}}"] }, { somethingElse: "x" });
+  assert.strictEqual(out.ok, false);
+  assert.match(out.error, /unfilled slot/);
+});
+
+test("multiple params in one selector all get filled", () => {
+  const out = P.applySelectorParams(
+    { row: ["ci:{{first}} {{second}}"] }, { first: "a", second: "b" });
+  assert.strictEqual(out.selectors.row[0], "ci:a b");
+});
+
+test("an unrelated recipe with no {{}} anywhere is untouched by the pass", () => {
+  const selectors = { a: ["#x"], b: ["ci:Screen time", "//h2"] };
+  const out = P.applySelectorParams(selectors, { childUsername: "alex" });
+  assert.deepStrictEqual(out.selectors, selectors);
+});
+
+// --- the substitution is actually wired into the run, not just unit-tested in isolation
+//
+// A correctly-tested pure function that nothing calls is the exact shape of bug that
+// shipped here before (_catalog/_unused went uncalled for two commits). This scans the
+// real source for the wiring rather than trusting that writing the function was enough.
+
+test("background.js substitutes selector params before readiness AND before the run", () => {
+  const bg = fs.readFileSync(path.join(__dirname, "..", "background.js"), "utf8");
+  assert.match(bg, /P\.applySelectorParams\(recipe\.selectors,\s*checked\.params\)/,
+               "runRecipe never calls applySelectorParams");
+  // Both waitForReady (readiness) and the run's executeScript call must receive the
+  // SUBSTITUTED map, not the recipe's raw one -- a stray `recipe.selectors` anywhere
+  // downstream of the substitution would silently un-fill every {{param}}.
+  const afterSub = bg.slice(bg.indexOf("P.applySelectorParams("));
+  assert.ok(!/waitForReady\(tab\.id,\s*recipe,\s*recipe\.selectors\)/.test(afterSub),
+            "waitForReady is passed the unsubstituted selectors");
+  assert.ok(!/args:\s*\[recipe,\s*recipe\.selectors,/.test(afterSub),
+            "the run's executeScript is passed the unsubstituted selectors");
+  assert.match(afterSub, /waitForReady\(tab\.id,\s*recipe,\s*selectors\)/);
+  assert.match(afterSub, /args:\s*\[recipe,\s*selectors,/);
 });

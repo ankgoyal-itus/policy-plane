@@ -95,12 +95,61 @@
   function expandSelector(selector) {
     if (!selector.startsWith("ci:")) return selector;
     const text = selector.slice(3).toLowerCase().replace(/'/g, "");
-    return "//*[contains(translate(normalize-space(),'" + _UPPER + "','" + _LOWER
-           + "'),'" + text + "')]";
+    // A bare contains() on normalize-space() matches every ANCESTOR of the real target
+    // too, because normalize-space() reads an element's full descendant text, not just
+    // its own. FIRST_ORDERED_NODE_TYPE walks the document in preorder, so the ancestor
+    // -- <html>, most of the time -- comes before its own matching descendant and wins.
+    // That was invisible for as long as "ci:" only ever answered "does this text exist
+    // anywhere" (a readyAnchor or a preflight assert); it surfaced the first time a
+    // "ci:" match became a CLICK TARGET, where clicking <html> does nothing. The
+    // `not(.//*[...])` clause excludes any element that has a matching descendant, so
+    // the innermost element carrying the text wins instead.
+    const cond = "contains(translate(normalize-space(),'" + _UPPER + "','" + _LOWER
+                 + "'),'" + text + "')";
+    return "//*[" + cond + " and not(.//*[" + cond + "])]";
   }
 
   function isXPath(selector) {
     return selector.startsWith("//") || selector.startsWith("(//");
+  }
+
+  /**
+   * Substitute {{param}} placeholders into a recipe's whole selector map, ONCE, before
+   * anything is injected into the page.
+   *
+   * Scoped to "ci:" selectors only, and this is a security boundary, not a style choice.
+   * A "ci:" selector's text is already concatenated into an XPath string, and quotes are
+   * already stripped from it for exactly this reason -- a family-roster page needs to
+   * search for a CHILD'S NAME, which is a runtime parameter, not something a recipe
+   * author can hardcode, so the substituted value has to land inside that same protected
+   * text. A raw hand-written XPath selector has no such stripping anywhere in it, so a
+   * parameter value containing a stray quote could rewrite what the query matches --
+   * this rejects that case at the door rather than trusting it silently.
+   */
+  function applySelectorParams(selectors, params) {
+    const out = {};
+    for (const [name, candidates] of Object.entries(selectors || {})) {
+      const filled = [];
+      for (const sel of candidates) {
+        if (!sel.includes("{{")) { filled.push(sel); continue; }
+        if (!sel.startsWith("ci:")) {
+          return { ok: false, code: CODES.BAD_PARAMS,
+                   error: `selector '${name}' templates a param outside a "ci:" `
+                          + `selector, which is not allowed: ${sel}` };
+        }
+        let done = sel;
+        for (const [key, value] of Object.entries(params || {})) {
+          done = done.split(`{{${key}}}`).join(String(value));
+        }
+        if (done.includes("{{")) {
+          return { ok: false, code: CODES.BAD_PARAMS,
+                   error: `selector '${name}' still has an unfilled slot: ${done}` };
+        }
+        filled.push(done);
+      }
+      out[name] = filled;
+    }
+    return { ok: true, selectors: out };
   }
 
   /**
@@ -183,7 +232,7 @@
   const PPPure = {
     CODES, ACTIONS, WRITE_ACTIONS, isWriteAction,
     validateParams, pickSelector, parseMinutes, expandSelector, isXPath,
-    summarizeLinks,
+    summarizeLinks, applySelectorParams,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = PPPure;

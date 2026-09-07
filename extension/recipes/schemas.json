@@ -1,4 +1,17 @@
 {
+  "family-console-schedule-verify": {
+    "version": 1,
+    "calibrated": true,
+    "mode": "verify",
+    "required": [
+      "childUsername"
+    ],
+    "optional": [],
+    "reads": [
+      "notAfterText",
+      "selectedChild"
+    ]
+  },
   "vendor-a-verify": {
     "version": 1,
     "calibrated": true,
