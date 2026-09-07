@@ -421,3 +421,111 @@ class MissingObservations(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScheduleIsJudgedByClockNotByAveraging(unittest.TestCase):
+    """not_after only, v1. The catastrophic bug from `time` -- "No limit" parsing to 0
+    minutes and reading as stricter than any real limit -- has an exact shape here: "no
+    bedtime set" must never parse to midnight and read as the strictest cutoff possible.
+
+    A rule can also carry more than one schedule param at once (alex-bedtime asks for
+    both a cutoff and a set of days). Weakest link: a param this judge cannot yet compare
+    must not let the one param it CAN check carry a false pass.
+    """
+
+    def setUp(self):
+        policy = load(harness.REPO / "policy.yaml", harness.REPO / "status.yaml")
+        self.sam_bedtime = policy.rule("sam-bedtime")       # not_after only
+        self.alex_bedtime = policy.rule("alex-bedtime")     # not_after AND days
+        self.alex_homework = policy.rule("alex-homework")   # not_between + days, neither built
+
+    def test_an_earlier_cutoff_is_stricter(self):
+        got = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "19:30"})
+        self.assertEqual(got["verdict"], observe.STRICTER)
+        self.assertTrue(got["in_force"])
+
+    def test_the_exact_cutoff_is_satisfied(self):
+        got = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "20:00"})
+        self.assertEqual(got["verdict"], observe.SATISFIED)
+
+    def test_a_later_cutoff_is_not_satisfied(self):
+        got = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "21:00"})
+        self.assertEqual(got["verdict"], observe.NOT_SATISFIED)
+        self.assertFalse(got["in_force"])
+
+    def test_12_hour_and_24_hour_clocks_agree(self):
+        a = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "19:30"})
+        b = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "7:30 PM"})
+        self.assertEqual(a["verdict"], b["verdict"])
+        self.assertEqual(a["observed_clock"], b["observed_clock"])
+
+    def test_no_bedtime_set_never_reads_as_the_strictest_possible_cutoff(self):
+        """The exact shape of the UNLIMITED bug: a child with NO bedtime must never come
+        out stricter than a child whose bedtime is set and early."""
+        unrestricted = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "Off"})
+        strict = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "19:00"})
+        self.assertEqual(unrestricted["verdict"], observe.NOT_SATISFIED,
+                         "no bedtime at all must read as looser than any real cutoff")
+        self.assertFalse(unrestricted["in_force"])
+        self.assertEqual(strict["verdict"], observe.STRICTER)
+        self.assertNotEqual(unrestricted["verdict"], strict["verdict"])
+
+    def test_no_cutoff_text_variants_all_mean_the_same_thing(self):
+        for text in ("Off", "None", "not set", "no limit", "never"):
+            with self.subTest(text):
+                got = observe.judge_schedule(self.sam_bedtime, {"notAfterText": text})
+                self.assertTrue(got["observed_no_cutoff"])
+                self.assertIsNone(got["observed_clock"],
+                                  "a sentinel must not also report a numeric clock time")
+
+    def test_unreadable_text_is_unknown_not_a_guess(self):
+        got = observe.judge_schedule(self.sam_bedtime, {"notAfterText": "sometime in the evening"})
+        self.assertEqual(got["verdict"], observe.UNKNOWN)
+        self.assertFalse(got["in_force"])
+
+    def test_a_missing_reading_is_unknown(self):
+        got = observe.judge_schedule(self.sam_bedtime, {})
+        self.assertEqual(got["verdict"], observe.UNKNOWN)
+
+    def test_a_cutoff_not_on_the_offered_list_is_unexpressible(self):
+        got = observe.judge_schedule(self.sam_bedtime,
+                                     {"notAfterText": "19:00",
+                                      "offeredText": ["19:00", "19:30", "21:00"]})
+        self.assertEqual(got["verdict"], observe.UNEXPRESSIBLE)
+        self.assertNotIn(observe.UNEXPRESSIBLE, observe.IN_FORCE)
+
+    def test_a_rule_with_an_unbuilt_param_reads_unknown_even_if_not_after_is_stricter(self):
+        """alex-bedtime asks for not_after AND days. days has no judge yet. An earlier
+        cutoff alone must not make the whole rule read as held."""
+        got = observe.judge_schedule(self.alex_bedtime, {"notAfterText": "19:00"})
+        self.assertEqual(got["verdict"], observe.UNKNOWN,
+                         "not_after alone being stricter must not carry the whole rule")
+        self.assertFalse(got["in_force"])
+        self.assertIn("days", got["why"])
+
+    def test_a_rule_with_an_unbuilt_param_stays_unknown_even_when_not_satisfied(self):
+        """The weakest-link guard only needs to fire when the built param says IN_FORCE.
+        If not_after already fails on its own, the combined verdict must still be the
+        honest failure, not a different kind of unknown."""
+        got = observe.judge_schedule(self.alex_bedtime, {"notAfterText": "22:00"})
+        self.assertIn(got["verdict"], (observe.NOT_SATISFIED, observe.UNKNOWN))
+        self.assertFalse(got["in_force"])
+
+    def test_a_rule_with_no_supported_param_at_all_is_unknown(self):
+        """alex-homework is not_between + days -- neither exists yet."""
+        got = observe.judge_schedule(self.alex_homework, {})
+        self.assertEqual(got["verdict"], observe.UNKNOWN)
+        self.assertIn("not_between", got["why"])
+        self.assertIn("days", got["why"])
+
+    def test_parse_clock_never_collapses_no_cutoff_to_midnight(self):
+        """The literal shape of the bug: NO_CUTOFF must not equal 0."""
+        self.assertNotEqual(observe.parse_clock("Off"), 0)
+        self.assertEqual(observe.parse_clock("Off"), observe.NO_CUTOFF)
+        self.assertGreater(observe.NO_CUTOFF, 23 * 60 + 59,
+                           "NO_CUTOFF must be later than every real clock time")
+
+    def test_parse_clock_rejects_impossible_times(self):
+        for bad in ("24:00", "25:61", "13:00 PM", "0:60"):
+            with self.subTest(bad):
+                self.assertIsNone(observe.parse_clock(bad))

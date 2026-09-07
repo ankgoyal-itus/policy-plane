@@ -39,6 +39,53 @@ _HOURS = re.compile(r"(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)\b", re.I)
 _MINS = re.compile(r"(\d+)\s*(?:m|min|mins|minute|minutes)\b", re.I)
 _BARE = re.compile(r"^(\d+)$")
 
+# A cutoff that never arrives. "No bedtime set" and "Off" mean the vendor never cuts
+# screens off, which is the LOOSEST possible answer to a not_after rule -- symmetric to
+# UNLIMITED for time. It has to compare as later than any real clock time, not as some
+# default hour, or a child with no bedtime at all could read as an early, strict one.
+NO_CUTOFF = float("inf")
+
+_CLOCK_24 = re.compile(r"^(\d{1,2}):(\d{2})$")
+_CLOCK_12 = re.compile(r"^(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)$", re.I)
+
+
+def parse_clock(text):
+    """-> minutes since midnight, or None if the text cannot be read as a clock time.
+
+    None is a real answer, same discipline as parse_minutes: "we could not read it" and
+    "it is set to 00:00" are opposite facts, and must never collapse into each other.
+    """
+    if text is None:
+        return None
+    s = text.strip()
+    if not s:
+        return None
+    if _UNLIMITED_TEXT.match(s):
+        return NO_CUTOFF
+    m = _CLOCK_24.match(s)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return h * 60 + mi
+        return None
+    m = _CLOCK_12.match(s)
+    if m:
+        h = int(m.group(1))
+        mi = int(m.group(2) or 0)
+        if not (1 <= h <= 12 and 0 <= mi <= 59):
+            return None
+        pm = m.group(3).lower().startswith("p")
+        h = (h % 12) + (12 if pm else 0)
+        return h * 60 + mi
+    return None
+
+
+def _show_clock(minutes):
+    if minutes == NO_CUTOFF:
+        return "no cutoff at all"
+    h, m = divmod(int(minutes), 60)
+    return f"{h:02d}:{m:02d}"
+
 
 def parse_minutes(text):
     """-> int minutes, or None if the text cannot be read as a duration.
@@ -98,6 +145,74 @@ def judge_time(requested_minutes, observed_text, offered_texts=()):
                   f"set to {observed} minutes, stricter than the {requested_minutes} asked for")
     return _v(NOT_SATISFIED, observed, offered,
               f"set to {_show(observed)}, looser than the {requested_minutes} asked for")
+
+
+def judge_schedule(rule, readings):
+    """-> verdict for a `schedule` rule. v1: `not_after` only.
+
+    A schedule rule can carry several params at once -- alex-bedtime asks for BOTH a
+    cutoff time and a set of days. Weakest link: the rule only reads as held when every
+    param it carries actually holds, so a param this judge cannot yet compare must not
+    silently drop out and let the one param it CAN check carry a false pass. It reads as
+    unknown instead, same as a failed read -- "the plane cannot yet verify this" and
+    "the plane looked and it was wrong" are different facts, but neither is `satisfied`.
+    """
+    supported = {"not_after"}
+    unbuilt = sorted(k for k in rule.params if k not in supported)
+    if "not_after" not in rule.params:
+        return _v_clock(UNKNOWN, None, [],
+                        f"this rule has no not_after; the plane cannot yet verify "
+                        f"{', '.join(unbuilt)}")
+
+    out = judge_not_after(rule.params["not_after"], readings.get("notAfterText"),
+                          readings.get("offeredText") or ())
+    if unbuilt and out["verdict"] in IN_FORCE:
+        was = out["verdict"]
+        out["verdict"], out["in_force"] = UNKNOWN, False
+        out["why"] += (f"; not_after alone would be {was}, but this rule also asks for "
+                       f"{', '.join(unbuilt)}, which the plane cannot yet verify -- so "
+                       f"the rule as a whole is unresolved, not held")
+    return out
+
+
+def judge_not_after(requested_text, observed_text, offered_texts=()):
+    """-> verdict dict comparing a single not_after cutoff. Deterministic."""
+    requested = parse_clock(requested_text)
+    observed = parse_clock(observed_text)
+    offered = [m for m in (parse_clock(t) for t in offered_texts or ()) if m is not None]
+
+    if requested is None:
+        return _v_clock(UNKNOWN, observed, offered,
+                        f"the rule's own not_after {requested_text!r} could not be read")
+    if offered and requested not in offered:
+        return _v_clock(UNEXPRESSIBLE, observed, offered,
+                        f"this app offers {', '.join(_show_clock(o) for o in sorted(set(offered)))} "
+                        f"as cutoffs; {_show_clock(requested)} is not on the list, so the "
+                        f"rule cannot be set here as written")
+    if observed is None:
+        return _v_clock(UNKNOWN, observed, offered,
+                        f"could not read a cutoff from {observed_text!r}")
+    # NO_CUTOFF needs no special case, same reasoning as UNLIMITED in judge_time:
+    # infinity is never earlier than a real requested time, so it falls through to
+    # not_satisfied on its own. Mutation testing proved a branch here is dead code.
+    if observed == requested:
+        return _v_clock(SATISFIED, observed, offered,
+                        f"cuts off at {_show_clock(observed)}, as asked")
+    if observed < requested:
+        return _v_clock(STRICTER, observed, offered,
+                        f"cuts off at {_show_clock(observed)}, earlier than the "
+                        f"{_show_clock(requested)} asked for")
+    return _v_clock(NOT_SATISFIED, observed, offered,
+                    f"cuts off at {_show_clock(observed)}, later than the "
+                    f"{_show_clock(requested)} asked for")
+
+
+def _v_clock(verdict, observed, offered, why):
+    return {"verdict": verdict, "in_force": verdict in IN_FORCE,
+            "observed_clock": None if observed == NO_CUTOFF else observed,
+            "observed_no_cutoff": observed == NO_CUTOFF,
+            "offered_clocks": sorted(m for m in set(offered) if m != NO_CUTOFF),
+            "why": why}
 
 
 def _v(verdict, observed, offered, why):
@@ -198,6 +313,8 @@ def judge(rule, observation, how=None):
                              readings.get("maturityText"),
                              readings.get("offeredText") or (),
                              getattr(how, "maps", None))
+    if rule.kind == "schedule":
+        return judge_schedule(rule, readings)
     return {"verdict": UNKNOWN, "in_force": False, "observed_minutes": None,
             "observed_unlimited": False, "offered_minutes": [],
             "why": f"no automated check exists for '{rule.kind}' rules yet"}
