@@ -442,6 +442,18 @@ def _verify_script():
     });
   } catch (err) { /* no BroadcastChannel: verification stays manual, which is fine */ }
 
+  // Records every attempt, success or failure -- best-effort, and deliberately never
+  // allowed to affect what the user sees. /observations is the judge's input and only
+  // ever hears about a SUCCESSFUL read; a NEEDS_LOGIN or a TIMEOUT today leaves no trace
+  // anywhere once the tab closes. This is that trace. Values never leave the browser
+  // beyond this call -- the server hashes params and keeps only the hash.
+  function postAudit(fields) {
+    fetch("/audit", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(fields)
+    }).catch(function () { /* audit is a side record, not the verdict */ });
+  }
+
   document.querySelectorAll(".vbtn").forEach(function (btn) {
     btn.addEventListener("click", function () {
       var rule = btn.dataset.rule, surface = btn.dataset.surface;
@@ -467,10 +479,21 @@ def _verify_script():
         if (!res.ok) {
           // A failed read is NOT a verdict. It never degrades into "not in force" --
           // "we could not look" and "it is not set" are different facts.
+          postAudit({
+            runId: res.runId || null, rule: rule, surface: surface,
+            recipe: btn.dataset.recipe, code: res.code,
+            failingStep: res.failingStep || null,
+            params: JSON.parse(btn.dataset.params)
+          });
           problem(out, res.code + (res.failingStep ? " at: " + res.failingStep : "")
                        + (res.error ? " — " + res.error : ""));
           return;
         }
+        postAudit({
+          runId: res.runId || null, rule: rule, surface: surface,
+          recipe: btn.dataset.recipe, code: res.code, failingStep: null,
+          params: JSON.parse(btn.dataset.params)
+        });
         fetch("/observations", {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

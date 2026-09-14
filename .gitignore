@@ -27,6 +27,10 @@ extension-key.pem
 # committable. Demo scratch files are covered by the same line.
 observations*.json
 
+# The audit log. Values are hashed, not stored -- but rule/surface/recipe names and the
+# household's own attempt history are still yours, not the repo's, same as observations*.
+audit*.json
+
 # The rendered dashboard. Built on demand by build.py, and once real vendors are
 # wired up it carries your household's actual settings — which should not enter git
 # even though observations.json itself is ignored.

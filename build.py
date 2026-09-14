@@ -154,24 +154,40 @@ DEMO_DASHBOARD = """<!doctype html><meta charset="utf-8">
 # mistyped or wrong-directory `mv` looks exactly like a successful one.
 OBSERVATIONS = HERE / "observations.json"
 
+# The audit log records every ATTEMPT -- success or failure -- which observations.json
+# never has. The page only POSTs to /observations once a read succeeds, so a NEEDS_LOGIN
+# or a TIMEOUT today leaves no trace anywhere once the tab closes. This is deliberately a
+# SEPARATE file rather than extra fields bolted onto observations.json: the audit log
+# drops every value on purpose (a hash of params, never the params themselves), so it
+# structurally cannot double as the judge's input, and observations.json structurally
+# cannot double as an audit log because it was never written to on failure.
+AUDIT = HERE / "audit.json"
+
 
 def use_demo_observations():
-    """Point observations at a scratch file, so a demo can start empty.
+    """Point observations AND the audit log at scratch files, so a demo can start empty.
 
     The real history is never opened -- not for reading, not for writing -- so there is
     no command in the demo path that can damage it. Any previous demo file is rotated
     rather than deleted: it is scratch data, but deleting something without saying so is
     how trust in a tool goes.
     """
-    global OBSERVATIONS
+    global OBSERVATIONS, AUDIT
     OBSERVATIONS = HERE / "observations.demo.json"
     if OBSERVATIONS.exists() and OBSERVATIONS.read_text(encoding="utf-8").strip() not in ("", "[]"):
         keep = HERE / "observations.demo.prev.json"
         OBSERVATIONS.replace(keep)
         print(f"demo mode: previous demo readings moved to {keep.name}")
     OBSERVATIONS.write_text("[]\n", encoding="utf-8")
-    print(f"demo mode: recording to {OBSERVATIONS.name} — "
-          f"{(HERE / 'observations.json').name} is untouched")
+
+    AUDIT = HERE / "audit.demo.json"
+    if AUDIT.exists() and AUDIT.read_text(encoding="utf-8").strip() not in ("", "[]"):
+        AUDIT.replace(HERE / "audit.demo.prev.json")
+    AUDIT.write_text("[]\n", encoding="utf-8")
+
+    print(f"demo mode: recording to {OBSERVATIONS.name} and {AUDIT.name} — "
+          f"{(HERE / 'observations.json').name} and {(HERE / 'audit.json').name} "
+          f"are untouched")
 
 
 def serve(stale_reason=""):
@@ -222,8 +238,48 @@ def serve(stale_reason=""):
                 if kept:
                     OBSERVATIONS.replace(HERE / "observations.demo.prev.json")
                 OBSERVATIONS.write_text("[]\n", encoding="utf-8")
+
+                # Rotated the same way, for the same reason: an audit log that only ever
+                # grows across demo resets is its own kind of stale, misleading state.
+                audit_kept = 0
+                try:
+                    audit_kept = len(json.loads(AUDIT.read_text(encoding="utf-8")) or [])
+                except (OSError, json.JSONDecodeError):
+                    audit_kept = 0
+                if audit_kept:
+                    AUDIT.replace(HERE / "audit.demo.prev.json")
+                AUDIT.write_text("[]\n", encoding="utf-8")
+
                 self._json(200, {"ok": True, "cleared": kept,
-                                 "rotated_to": "observations.demo.prev.json" if kept else None})
+                                 "rotated_to": "observations.demo.prev.json" if kept else None,
+                                 "audit_cleared": audit_kept,
+                                 "audit_rotated_to": "audit.demo.prev.json" if audit_kept else None})
+                return
+            if self.path.rstrip("/") == "/audit":
+                # Records every ATTEMPT, success or failure -- see AUDIT's declaration
+                # above for why this cannot just be extra fields on /observations.
+                # Params are hashed HERE, server-side, and only the hash is ever
+                # written: the page still sends raw params over the wire (same as it
+                # already does for /observations), but nothing downstream of this
+                # function ever sees them again.
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    body = json.loads(self.rfile.read(length) or b"{}")
+                    if not isinstance(body, dict) or not body.get("rule"):
+                        raise ValueError("expected an object with at least a 'rule'")
+                except (ValueError, json.JSONDecodeError) as exc:
+                    self._json(400, {"ok": False, "error": str(exc)})
+                    return
+                entry = _audit_entry(body)
+                existing = []
+                if AUDIT.exists():
+                    try:
+                        existing = json.loads(AUDIT.read_text()) or []
+                    except json.JSONDecodeError:
+                        existing = []
+                existing.append(entry)
+                AUDIT.write_text(json.dumps(existing, indent=2) + "\n")
+                self._json(200, {"ok": True, "recorded": len(existing)})
                 return
             if self.path.rstrip("/") != "/observations":
                 self.send_error(404)
@@ -429,6 +485,31 @@ def explain(rule_id, today):
     print(f"\n  IN FORCE VIA: {', '.join(s.name for s in covered) or 'nothing — '
                                 'no target is confirmed'}\n")
     return 0
+
+
+def _audit_entry(body):
+    """-> one audit record for a POSTed attempt. Values are hashed, never kept.
+
+    This is the one place that decides what an audit record contains, called from the
+    /audit handler AND directly from tests -- so "no raw param value survives" has one
+    function to check rather than a test needing to re-derive the HTTP layer to prove it.
+    """
+    import datetime as _dt
+    import hashlib
+    import json as _json
+    params_hash = hashlib.sha256(
+        _json.dumps(body.get("params") or {}, sort_keys=True).encode()
+    ).hexdigest()[:16]
+    return {
+        "runId": body.get("runId"),
+        "at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "rule": body.get("rule"),
+        "surface": body.get("surface"),
+        "recipe": body.get("recipe"),
+        "code": body.get("code"),
+        "failingStep": body.get("failingStep"),
+        "paramsHash": params_hash,
+    }
 
 
 def _judge_one(observation):
