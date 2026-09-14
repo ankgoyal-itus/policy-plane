@@ -342,5 +342,32 @@ def latest(observations, rule_id, surface_id):
     return max(matching, key=lambda o: o.get("at", ""))
 
 
+def as_of(observations, rule_id, surface_id, cutoff):
+    """-> the most recent observation for this pair dated on or before `cutoff` (a
+    date), or None.
+
+    Drift asks "what did this look like a week ago", which needs the reading that was
+    CURRENT then -- not just any reading from around that time, and not the single
+    reading nearest to that instant. Using the most recent one at-or-before the cutoff
+    is what `pair_state` would have shown a viewer looking at the page that day.
+    """
+    best = None
+    for o in observations:
+        if o.get("rule") != rule_id or o.get("surface") != surface_id:
+            continue
+        stamp = o.get("at")
+        if not stamp:
+            continue
+        try:
+            seen = datetime.date.fromisoformat(str(stamp)[:10])
+        except ValueError:
+            continue
+        if seen > cutoff:
+            continue
+        if best is None or seen > best[0]:
+            best = (seen, o)
+    return best[1] if best else None
+
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()

@@ -9,7 +9,8 @@ SUITES = [("EVAL 1  coverage is never overstated", "evals.test_1_honest_coverage
           ("EVAL 4  one policy, many targets", "evals.test_4_translation"),
           ("EVAL 5  typed params, scoping, partial", "evals.test_5_parameters"),
           ("EVAL 6  the plane judges, the reader reads", "evals.test_6_judging"),
-          ("EVAL 7  every attempt is recorded, no value survives", "evals.test_7_audit")]
+          ("EVAL 7  every attempt is recorded, no value survives", "evals.test_7_audit"),
+          ("EVAL 8  drift: has reality changed, not just gone stale", "evals.test_8_drift")]
 
 if __name__ == "__main__":
     failed = 0

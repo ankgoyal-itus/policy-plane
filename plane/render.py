@@ -177,6 +177,19 @@ def render(plan):
     if plan.get("verifiable"):
         out.append(_hero(plan))
 
+    drift = plan.get("drift") or []
+    if drift:
+        # Above the fold, deliberately: recheck_days can go 90 days without saying a
+        # word while a setting quietly loosens on day 3. This is the one thing on the
+        # page that says "something actually changed", not just "this is due for a
+        # look" -- burying it in a collapsed section would defeat the point of having it.
+        out.append("<h2>Changed in the last week</h2>")
+        out.append('<p class="sub">Comparing the latest reading against one from at '
+                   'least 7 days ago. A pair with only one reading, or nothing rechecked '
+                   'in that window, is not listed here — that is a staleness question, '
+                   'not a drift one.</p>')
+        out.append(_drift_section(plan))
+
     out.append("<h2>The rest of the plane</h2>")
 
     legend = ('<p class="sub" style="margin:10px 0 0">'
@@ -593,6 +606,31 @@ def _device_section(devices):
                 bits.append(f'<p class="opt"><span class="pill warn">nowhere</span> '
                             f'{_e(r["say"])}</p>')
         bits.append("</div>")
+    return "".join(bits)
+
+
+def _drift_section(plan):
+    """One card per pair whose in-force status flipped in the last DRIFT_WINDOW_DAYS.
+
+    Shows the vendor's own words on both sides, same discipline as `_reveal` -- a
+    verdict name alone ("loosened") asks a parent to take the flip on faith; the actual
+    text the page said before and after is what makes it checkable.
+    """
+    names = {s["id"]: s["name"] for s in plan["surfaces"]}
+    bits = []
+    for d in sorted(plan.get("drift") or [],
+                    key=lambda d: (d["direction"] != "loosened", d["rule"])):
+        chip = ('<span class="chip warn">loosened</span>' if d["direction"] == "loosened"
+                else '<span class="chip ok">tightened</span>')
+        before, after = d["before"], d["after"]
+        surface_name = names.get(d["surface"], d["surface"]).split(" — ")[0]
+        bits.append(
+            f'<div class="card"><h3>{_e(d["say"])} {chip}</h3>'
+            f'<p class="opt">{_e(surface_name)} said '
+            f'“{_e(before["said"] or "nothing readable")}” '
+            f'({_e(before["at"] or "unknown date")}), now says '
+            f'“{_e(after["said"] or "nothing readable")}” '
+            f'({_e(after["at"] or "unknown date")}).</p></div>')
     return "".join(bits)
 
 

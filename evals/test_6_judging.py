@@ -529,3 +529,28 @@ class ScheduleIsJudgedByClockNotByAveraging(unittest.TestCase):
         for bad in ("24:00", "25:61", "13:00 PM", "0:60"):
             with self.subTest(bad):
                 self.assertIsNone(observe.parse_clock(bad))
+
+
+class TheVendorsWordsAreShownForScheduleToo(unittest.TestCase):
+    """`_said` fed the reveal card off `dailyLimitText`/`maturityText` only, so a
+    verified bedtime cutoff -- read straight from the page -- showed a blank "vendor
+    said" field even though the extension read a real value. The verdict was still
+    correct; only the proof anyone could see was missing."""
+
+    PAIR = ("sam-bedtime", "sim-family-console")
+
+    def cell(self, notAfterText):
+        obs = {"rule": self.PAIR[0], "surface": self.PAIR[1], "recipe": "test",
+               "at": "2026-09-01T10:00:00Z", "code": "OK",
+               "readings": {"notAfterText": notAfterText, "selectedChild": "sam"}}
+        policy = load(harness.REPO / "policy.yaml", harness.REPO / "status.yaml")
+        plan = build(policy, harness.TODAY, [obs])
+        return plan["cells"][self.PAIR]
+
+    def test_the_read_cutoff_text_appears_as_said(self):
+        self.assertEqual(self.cell("8:00 PM")["said"], "8:00 PM")
+
+    def test_a_12_hour_reading_is_shown_verbatim_not_reformatted(self):
+        """The judge re-parses the text for its own verdict, but the display shows
+        exactly what the page said -- the whole point of showing it at all."""
+        self.assertEqual(self.cell("7:30 PM")["said"], "7:30 PM")

@@ -18,6 +18,12 @@ UNEXPRESSIBLE = "unexpressible"
 FULL, PARTIAL = "full", "partial"
 COVERED_STATES = (VERIFIED,)          # the whole safety property, in one line
 
+# Fixed, not tied to any surface's `recheck_days`. Staleness asks "is this reading old
+# enough to stop trusting"; drift asks "has reality itself changed" -- a surface only
+# rechecked every 90 days can still have quietly loosened last Tuesday, and recheck_days
+# would never say so on its own timer.
+DRIFT_WINDOW_DAYS = 7
+
 
 def _today(today):
     if isinstance(today, datetime.date):
@@ -164,6 +170,7 @@ def build(policy, today, observations=()):
         "checklist": sorted(checklist, key=lambda c: (c["surface"], c["rule"])),
         "summary": _summary(rules_out, cells),
         "by_device": _by_device(policy, cells),
+        "drift": _drift(policy, observations, today),
     }
 
 
@@ -206,6 +213,58 @@ def _by_device(policy, cells):
                 "rules": rows,
                 "held": sum(1 for r in rows if r["state"] in COVERED_STATES),
                 "unreachable": sum(1 for r in rows if not r["reachable"]),
+            })
+    return out
+
+
+def _drift(policy, observations, today):
+    """-> [{rule, surface, kid, say, direction, before, after}] -- pairs whose in-force
+    status has flipped since DRIFT_WINDOW_DAYS ago.
+
+    Needs TWO real readings to compare: one recent enough to stand in for "now" (younger
+    than the window) and one at least a week old to stand in for "then". A pair with only
+    one reading ever, or nothing since the cutoff, reports nothing here -- silence would
+    otherwise read as "confirmed unchanged" when it actually means "never rechecked",
+    which is a staleness fact, not a drift one.
+    """
+    cutoff = _today(today) - datetime.timedelta(days=DRIFT_WINDOW_DAYS)
+    out = []
+    for rule in policy.rules:
+        for surface in policy.surfaces:
+            if not applies(rule, surface):
+                continue
+            now_obs = observe.latest(observations, rule.id, surface.id)
+            if now_obs is None:
+                continue
+            # An unparseable or missing timestamp means we cannot tell whether this
+            # reading is recent -- treating it as "now" anyway would compare against an
+            # unknown age and call the result drift on a guess.
+            if _age(now_obs.get("at"), today) is None:
+                continue
+            then_obs = observe.as_of(observations, rule.id, surface.id, cutoff)
+            if then_obs is None:
+                continue                      # no reading old enough to stand in for "then"
+            # No separate "is now_obs itself fresh enough" check is needed: as_of only
+            # ever returns the most recent reading dated <= cutoff, and now_obs is the
+            # most recent reading OVERALL. If nothing has been rechecked within the
+            # window, now_obs's own date is already <= cutoff, so it IS that most-recent
+            # -<=-cutoff reading -- then_obs collapses onto the same object, the verdicts
+            # below come out equal, and the pair is filtered by the in_force check
+            # instead of by a redundant age test here.
+            how = surface.how.get(rule.kind)
+            now_verdict = observe.judge(rule, now_obs, how)
+            then_verdict = observe.judge(rule, then_obs, how)
+            if now_verdict["in_force"] == then_verdict["in_force"]:
+                continue
+            out.append({
+                "rule": rule.id, "surface": surface.id, "kid": rule.kid, "say": rule.say,
+                "direction": "loosened" if then_verdict["in_force"] else "tightened",
+                "before": {"in_force": then_verdict["in_force"],
+                           "verdict": then_verdict["verdict"],
+                           "said": _said(then_obs), "at": _stamp(then_obs)},
+                "after": {"in_force": now_verdict["in_force"],
+                          "verdict": now_verdict["verdict"],
+                          "said": _said(now_obs), "at": _stamp(now_obs)},
             })
     return out
 
@@ -290,7 +349,7 @@ def _said(record):
     if not record:
         return None
     readings = (record if isinstance(record, dict) else {}).get("readings") or {}
-    for key in ("dailyLimitText", "maturityText"):
+    for key in ("dailyLimitText", "maturityText", "notAfterText"):
         if readings.get(key):
             return str(readings[key])
     return None
