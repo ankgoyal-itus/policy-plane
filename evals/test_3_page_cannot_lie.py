@@ -186,6 +186,14 @@ class PageMatchesPlan(unittest.TestCase):
         self.assertNotIn("<img", self.html)
         self.assertNotIn("shots/", self.html)
 
+    def test_a_pair_with_evidence_says_so_without_the_path(self):
+        """`has_evidence`/`evidence` were computed into every cell but never rendered at
+        all -- a parent had no way to see that a screenshot was ever kept. The fix has
+        to thread the needle with the test above: note that one exists, never the path."""
+        self.assertIn("evidence on file", self.html)
+        self.assertNotIn("screentime-downtime-2026-08-14.png", self.html,
+                         "the filename itself is exactly the leak the test above guards")
+
     def test_the_plan_carries_no_behaviour_data(self):
         """Monitoring is a non-goal, enforced structurally rather than by word-search.
 

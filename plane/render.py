@@ -664,6 +664,15 @@ def _rule_card(rule, plan):
         pills = "".join(f'<span class="pill ok">✓ {_e(names[s])}</span>'
                         for s in rule["covered_by"])
         bits.append(f"<p>In force via {pills}</p>")
+        # A note that a screenshot exists, never the path and never the image. This page
+        # is what gets published, and the evidence path lives under shots/ -- gitignored,
+        # local-only, and never meant to leave this machine. See status.yaml's own
+        # comment on the field, and test_evidence_images_are_never_embedded.
+        for s in rule["covered_by"]:
+            cell = plan["cells"][(rule["id"], s)]
+            if cell.get("has_evidence"):
+                bits.append(f'<div class="check">📎 evidence on file for '
+                            f'{_e(names[s])} (kept locally, not shown here)</div>')
     elif not rule["reachable"]:
         bits.append('<p><span class="pill warn">nothing here can enforce this</span> '
                     'No app in your list handles this kind of rule.</p>')
